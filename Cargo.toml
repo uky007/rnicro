@@ -31,3 +31,6 @@ colored = "2"
 # Error handling
 anyhow = "1"
 thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

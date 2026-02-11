@@ -21,6 +21,8 @@ pub mod types;
 pub mod pipe;
 pub mod procfs;
 pub mod disasm;
+pub mod elf;
+pub mod dwarf;
 
 // Linux-only modules (ptrace, user_regs_struct, etc.)
 #[cfg(target_os = "linux")]

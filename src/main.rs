@@ -44,6 +44,11 @@ mod linux {
             target.pid(),
             cli.program.display()
         );
+        if target.has_debug_info() {
+            println!("  debug info: {}", "available".green());
+        } else {
+            println!("  debug info: {}", "not found (stripped binary)".yellow());
+        }
 
         let mut rl = DefaultEditor::new()?;
 
@@ -91,11 +96,15 @@ mod linux {
     fn handle_command(target: &mut Target, cmd: &str, args: &[&str]) -> anyhow::Result<()> {
         match cmd {
             "continue" | "c" => cmd_continue(target),
-            "step" | "stepi" | "si" => cmd_step(target),
+            "stepi" | "si" => cmd_stepi(target),
+            "step" | "s" => cmd_step(target),
+            "next" | "n" => cmd_next(target),
+            "finish" | "fin" => cmd_finish(target),
             "register" | "reg" | "r" => cmd_register(target, args),
             "breakpoint" | "break" | "b" => cmd_breakpoint(target, args),
             "memory" | "mem" | "x" => cmd_memory(target, args),
             "disassemble" | "disas" | "d" => cmd_disassemble(target, args),
+            "list" | "l" => cmd_list(target),
             "help" | "h" => cmd_help(),
             "quit" | "q" => std::process::exit(0),
             _ => {
@@ -111,14 +120,43 @@ mod linux {
     fn cmd_continue(target: &mut Target) -> anyhow::Result<()> {
         let reason = target.resume()?;
         print_stop_reason(&reason);
+        print_location(target);
         Ok(())
     }
 
-    fn cmd_step(target: &mut Target) -> anyhow::Result<()> {
+    fn cmd_stepi(target: &mut Target) -> anyhow::Result<()> {
         let reason = target.step_instruction()?;
         print_stop_reason(&reason);
         let regs = target.read_registers()?;
         println!("  rip = {}", format!("0x{:016x}", regs.pc()).cyan());
+        print_location(target);
+        Ok(())
+    }
+
+    fn cmd_step(target: &mut Target) -> anyhow::Result<()> {
+        let reason = target.step_in()?;
+        print_stop_reason(&reason);
+        let regs = target.read_registers()?;
+        println!("  rip = {}", format!("0x{:016x}", regs.pc()).cyan());
+        print_location(target);
+        Ok(())
+    }
+
+    fn cmd_next(target: &mut Target) -> anyhow::Result<()> {
+        let reason = target.step_over()?;
+        print_stop_reason(&reason);
+        let regs = target.read_registers()?;
+        println!("  rip = {}", format!("0x{:016x}", regs.pc()).cyan());
+        print_location(target);
+        Ok(())
+    }
+
+    fn cmd_finish(target: &mut Target) -> anyhow::Result<()> {
+        let reason = target.step_out()?;
+        print_stop_reason(&reason);
+        let regs = target.read_registers()?;
+        println!("  rip = {}", format!("0x{:016x}", regs.pc()).cyan());
+        print_location(target);
         Ok(())
     }
 
@@ -161,10 +199,10 @@ mod linux {
         match args.first().copied() {
             Some("set") | Some("s") => {
                 if args.len() < 2 {
-                    println!("usage: breakpoint set <address>");
+                    println!("usage: breakpoint set <address|symbol>");
                     return Ok(());
                 }
-                let addr = VirtAddr(parse_address(args[1])?);
+                let addr = resolve_address(target, args[1])?;
                 let id = target.set_breakpoint(addr)?;
                 println!("  breakpoint #{} set at {}", id, addr);
             }
@@ -262,6 +300,39 @@ mod linux {
         Ok(())
     }
 
+    fn cmd_list(target: &mut Target) -> anyhow::Result<()> {
+        if let Ok(Some(loc)) = target.source_location() {
+            println!(
+                "  {} {}:{}",
+                "at".dimmed(),
+                loc.file.bold(),
+                loc.line.to_string().bold()
+            );
+            // Try to read and display the source file
+            if let Ok(content) = std::fs::read_to_string(&loc.file) {
+                let lines: Vec<&str> = content.lines().collect();
+                let line_idx = loc.line as usize;
+                let start = line_idx.saturating_sub(4);
+                let end = (line_idx + 3).min(lines.len());
+                for i in start..end {
+                    let marker = if i + 1 == line_idx { ">" } else { " " };
+                    let line_num = format!("{:4}", i + 1);
+                    if i + 1 == line_idx {
+                        println!("  {} {} {}", marker.green().bold(), line_num.green(), lines[i]);
+                    } else {
+                        println!("  {} {} {}", marker, line_num.dimmed(), lines[i]);
+                    }
+                }
+            }
+        } else {
+            println!("  {}", "no source information available".yellow());
+        }
+        if let Ok(Some(func)) = target.current_function() {
+            println!("  in {}", func.cyan());
+        }
+        Ok(())
+    }
+
     fn cmd_help() -> anyhow::Result<()> {
         println!("{}", "rnicro - Linux x86_64 debugger".bold());
         println!();
@@ -269,6 +340,18 @@ mod linux {
         println!(
             "  {} (si)            single-step one instruction",
             "stepi".bold()
+        );
+        println!(
+            "  {} (s)              source-level step into",
+            "step".bold()
+        );
+        println!(
+            "  {} (n)              source-level step over",
+            "next".bold()
+        );
+        println!(
+            "  {} (fin)          step out of current function",
+            "finish".bold()
         );
         println!(
             "  {} (r)          read/write registers",
@@ -281,6 +364,7 @@ mod linux {
             "breakpoint".bold()
         );
         println!("    breakpoint set <addr>  set a breakpoint");
+        println!("    breakpoint set <sym>   set at symbol");
         println!("    breakpoint delete <a>  remove a breakpoint");
         println!("    breakpoint list        list all breakpoints");
         println!(
@@ -295,11 +379,16 @@ mod linux {
         );
         println!("    disassemble [addr] [N] disassemble N instructions");
         println!("    disassemble --att     use AT&T syntax");
+        println!(
+            "  {} (l)              show source at current PC",
+            "list".bold()
+        );
         println!("  {} (h)              this help", "help".bold());
         println!("  {} (q)              exit", "quit".bold());
         Ok(())
     }
 
+    /// Print a stop reason.
     fn print_stop_reason(reason: &StopReason) {
         match reason {
             StopReason::BreakpointHit { addr } => {
@@ -320,6 +409,17 @@ mod linux {
             StopReason::ThreadCreated(pid) => {
                 println!("  new thread created: {}", pid);
             }
+        }
+    }
+
+    /// Print source location and function name (if available).
+    fn print_location(target: &Target) {
+        if let Ok(Some(loc)) = target.source_location() {
+            print!("  at {}", loc.to_string().bold());
+            if let Ok(Some(func)) = target.current_function() {
+                print!(" in {}", func.cyan());
+            }
+            println!();
         }
     }
 
@@ -349,6 +449,22 @@ mod linux {
             }
             println!("|");
         }
+    }
+
+    /// Resolve an address argument that may be a hex address or a symbol name.
+    fn resolve_address(target: &Target, s: &str) -> anyhow::Result<VirtAddr> {
+        // Try parsing as hex address first
+        if let Ok(addr) = parse_address(s) {
+            return Ok(VirtAddr(addr));
+        }
+        // Try symbol lookup
+        if let Some(addr) = target.find_symbol(s) {
+            return Ok(addr);
+        }
+        Err(anyhow::anyhow!(
+            "'{}' is not a valid address or known symbol",
+            s
+        ))
     }
 
     fn parse_address(s: &str) -> anyhow::Result<u64> {

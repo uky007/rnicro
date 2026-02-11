@@ -4,8 +4,8 @@
 //! Provides instruction decoding and formatted output for
 //! examining code in the tracee's memory.
 
-use iced_x86::{Decoder, DecoderOptions, Formatter, FormatterOutput, FormatterTextKind,
-               GasFormatter, IntelFormatter, Instruction};
+use iced_x86::{Decoder, DecoderOptions, FlowControl, Formatter, FormatterOutput,
+               FormatterTextKind, GasFormatter, IntelFormatter, Instruction};
 
 use crate::types::VirtAddr;
 
@@ -99,6 +99,39 @@ pub fn format_disassembly(instructions: &[DisasmInstruction]) -> String {
     out
 }
 
+/// Basic information about a decoded instruction.
+///
+/// Used by source-level stepping to detect CALL/RET instructions.
+#[derive(Debug, Clone)]
+pub struct InstructionInfo {
+    /// Length of the instruction in bytes.
+    pub len: usize,
+    /// Whether this is a CALL instruction (direct or indirect).
+    pub is_call: bool,
+    /// Whether this is a RET instruction.
+    pub is_ret: bool,
+}
+
+/// Decode a single instruction and return flow-control information.
+///
+/// Returns `None` if the bytes cannot be decoded as a valid instruction.
+pub fn decode_instruction_info(code: &[u8], addr: VirtAddr) -> Option<InstructionInfo> {
+    let mut decoder = Decoder::with_ip(64, code, addr.addr(), DecoderOptions::NONE);
+    if !decoder.can_decode() {
+        return None;
+    }
+
+    let insn = decoder.decode();
+    Some(InstructionInfo {
+        len: insn.len(),
+        is_call: matches!(
+            insn.flow_control(),
+            FlowControl::Call | FlowControl::IndirectCall
+        ),
+        is_ret: insn.flow_control() == FlowControl::Return,
+    })
+}
+
 /// Internal buffer for iced-x86 formatter output.
 struct FormatterOutputBuffer {
     text: String,
@@ -177,6 +210,45 @@ mod tests {
         assert_eq!(insns.len(), 1);
         // GAS uses %rbp
         assert!(insns[0].text.contains("%rbp"));
+    }
+
+    #[test]
+    fn decode_call_instruction() {
+        // call rax (indirect call: FF D0)
+        let code = [0xFF, 0xD0];
+        let info = decode_instruction_info(&code, VirtAddr(0x1000)).unwrap();
+        assert!(info.is_call);
+        assert!(!info.is_ret);
+        assert_eq!(info.len, 2);
+    }
+
+    #[test]
+    fn decode_ret_instruction() {
+        // ret (C3)
+        let code = [0xC3];
+        let info = decode_instruction_info(&code, VirtAddr(0x1000)).unwrap();
+        assert!(!info.is_call);
+        assert!(info.is_ret);
+        assert_eq!(info.len, 1);
+    }
+
+    #[test]
+    fn decode_nop_instruction() {
+        let code = [0x90];
+        let info = decode_instruction_info(&code, VirtAddr(0x1000)).unwrap();
+        assert!(!info.is_call);
+        assert!(!info.is_ret);
+        assert_eq!(info.len, 1);
+    }
+
+    #[test]
+    fn decode_direct_call() {
+        // call rel32 (E8 xx xx xx xx)
+        let code = [0xE8, 0x00, 0x00, 0x00, 0x00];
+        let info = decode_instruction_info(&code, VirtAddr(0x1000)).unwrap();
+        assert!(info.is_call);
+        assert!(!info.is_ret);
+        assert_eq!(info.len, 5);
     }
 
     #[test]
