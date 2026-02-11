@@ -105,6 +105,8 @@ mod linux {
             "memory" | "mem" | "x" => cmd_memory(target, args),
             "disassemble" | "disas" | "d" => cmd_disassemble(target, args),
             "backtrace" | "bt" => cmd_backtrace(target),
+            "catchpoint" | "catch" => cmd_catchpoint(target, args),
+            "signal" | "sig" => cmd_signal(target, args),
             "list" | "l" => cmd_list(target),
             "help" | "h" => cmd_help(),
             "quit" | "q" => std::process::exit(0),
@@ -301,6 +303,161 @@ mod linux {
         Ok(())
     }
 
+    fn cmd_catchpoint(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        match args.first().copied() {
+            Some("syscall") | Some("sys") => {
+                match args.get(1).copied() {
+                    Some("add") | Some("a") => {
+                        if args.len() < 3 {
+                            println!("usage: catchpoint syscall add <name|number|all>");
+                            return Ok(());
+                        }
+                        if args[2] == "all" {
+                            target.set_catch_all_syscalls(true);
+                            println!("  catching all syscalls");
+                        } else if let Some(num) = rnicro::syscall::number(args[2]) {
+                            target.catch_syscall(num);
+                            println!("  catching syscall {} ({})", args[2], num);
+                        } else if let Ok(num) = args[2].parse::<u64>() {
+                            target.catch_syscall(num);
+                            let name = rnicro::syscall::name(num).unwrap_or("unknown");
+                            println!("  catching syscall {} ({})", name, num);
+                        } else {
+                            println!("unknown syscall: {}", args[2]);
+                        }
+                    }
+                    Some("remove") | Some("r") => {
+                        if args.len() < 3 {
+                            println!("usage: catchpoint syscall remove <name|number|all>");
+                            return Ok(());
+                        }
+                        if args[2] == "all" {
+                            target.set_catch_all_syscalls(false);
+                            println!("  stopped catching all syscalls");
+                        } else if let Some(num) = rnicro::syscall::number(args[2]) {
+                            target.uncatch_syscall(num);
+                            println!("  removed catchpoint for syscall {}", args[2]);
+                        } else if let Ok(num) = args[2].parse::<u64>() {
+                            target.uncatch_syscall(num);
+                            println!("  removed catchpoint for syscall {}", num);
+                        }
+                    }
+                    Some("list") | Some("l") | None => {
+                        if target.is_catching_syscalls() {
+                            let caught = target.caught_syscalls();
+                            if caught.is_empty() {
+                                println!("  catching: all syscalls");
+                            } else {
+                                println!("  caught syscalls:");
+                                for &num in caught {
+                                    let name = rnicro::syscall::name(num).unwrap_or("unknown");
+                                    println!("    {} ({})", name, num);
+                                }
+                            }
+                        } else {
+                            println!("  no syscall catchpoints set");
+                        }
+                    }
+                    Some(sub) => println!("unknown catchpoint syscall subcommand: {}", sub),
+                }
+            }
+            None => {
+                println!("usage: catchpoint syscall add|remove|list ...");
+            }
+            Some(sub) => println!("unknown catchpoint type: {}", sub),
+        }
+        Ok(())
+    }
+
+    fn cmd_signal(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        use nix::sys::signal::Signal;
+
+        match args.first().copied() {
+            Some("handle") | Some("h") => {
+                if args.len() < 3 {
+                    println!("usage: signal handle <signal> stop|nostop|pass|nopass");
+                    return Ok(());
+                }
+                let sig = parse_signal(args[1])?;
+                let mut policy = target.signal_policy(sig);
+                for &action in &args[2..] {
+                    match action {
+                        "stop" => policy.stop = true,
+                        "nostop" => policy.stop = false,
+                        "pass" => policy.pass = true,
+                        "nopass" => policy.pass = false,
+                        other => {
+                            println!("unknown action: {} (use stop|nostop|pass|nopass)", other);
+                            return Ok(());
+                        }
+                    }
+                }
+                target.set_signal_policy(sig, policy);
+                println!(
+                    "  {:?}: stop={}, pass={}",
+                    sig, policy.stop, policy.pass
+                );
+            }
+            Some("list") | Some("l") | None => {
+                println!("  {:>15}  {}  {}", "signal".bold(), "stop".bold(), "pass".bold());
+                let signals = [
+                    Signal::SIGHUP, Signal::SIGINT, Signal::SIGQUIT,
+                    Signal::SIGILL, Signal::SIGTRAP, Signal::SIGABRT,
+                    Signal::SIGBUS, Signal::SIGFPE, Signal::SIGKILL,
+                    Signal::SIGUSR1, Signal::SIGSEGV, Signal::SIGUSR2,
+                    Signal::SIGPIPE, Signal::SIGALRM, Signal::SIGTERM,
+                    Signal::SIGCHLD, Signal::SIGCONT, Signal::SIGSTOP,
+                    Signal::SIGTSTP, Signal::SIGTTIN, Signal::SIGTTOU,
+                ];
+                for sig in &signals {
+                    let policy = target.signal_policy(*sig);
+                    println!(
+                        "  {:>15}  {:<5}  {}",
+                        format!("{:?}", sig),
+                        if policy.stop { "yes" } else { "no" },
+                        if policy.pass { "yes" } else { "no" },
+                    );
+                }
+            }
+            Some(sub) => println!("unknown signal subcommand: {}", sub),
+        }
+        Ok(())
+    }
+
+    fn parse_signal(s: &str) -> anyhow::Result<nix::sys::signal::Signal> {
+        use nix::sys::signal::Signal;
+        let s_upper = s.to_uppercase();
+        let name = if s_upper.starts_with("SIG") {
+            s_upper.clone()
+        } else {
+            format!("SIG{}", s_upper)
+        };
+        match name.as_str() {
+            "SIGHUP" => Ok(Signal::SIGHUP),
+            "SIGINT" => Ok(Signal::SIGINT),
+            "SIGQUIT" => Ok(Signal::SIGQUIT),
+            "SIGILL" => Ok(Signal::SIGILL),
+            "SIGTRAP" => Ok(Signal::SIGTRAP),
+            "SIGABRT" => Ok(Signal::SIGABRT),
+            "SIGBUS" => Ok(Signal::SIGBUS),
+            "SIGFPE" => Ok(Signal::SIGFPE),
+            "SIGKILL" => Ok(Signal::SIGKILL),
+            "SIGUSR1" => Ok(Signal::SIGUSR1),
+            "SIGSEGV" => Ok(Signal::SIGSEGV),
+            "SIGUSR2" => Ok(Signal::SIGUSR2),
+            "SIGPIPE" => Ok(Signal::SIGPIPE),
+            "SIGALRM" => Ok(Signal::SIGALRM),
+            "SIGTERM" => Ok(Signal::SIGTERM),
+            "SIGCHLD" => Ok(Signal::SIGCHLD),
+            "SIGCONT" => Ok(Signal::SIGCONT),
+            "SIGSTOP" => Ok(Signal::SIGSTOP),
+            "SIGTSTP" => Ok(Signal::SIGTSTP),
+            "SIGTTIN" => Ok(Signal::SIGTTIN),
+            "SIGTTOU" => Ok(Signal::SIGTTOU),
+            _ => Err(anyhow::anyhow!("unknown signal: {}", s)),
+        }
+    }
+
     fn cmd_backtrace(target: &mut Target) -> anyhow::Result<()> {
         match target.backtrace() {
             Ok(frames) => {
@@ -411,6 +568,20 @@ mod linux {
             "backtrace".bold()
         );
         println!(
+            "  {} (catch)    manage syscall catchpoints",
+            "catchpoint".bold()
+        );
+        println!("    catch syscall add <name>   catch a syscall");
+        println!("    catch syscall add all      catch all syscalls");
+        println!("    catch syscall remove <n>   remove catchpoint");
+        println!("    catch syscall list         show catchpoints");
+        println!(
+            "  {} (sig)          configure signal handling",
+            "signal".bold()
+        );
+        println!("    signal handle <sig> <act>  set policy (stop|nostop|pass|nopass)");
+        println!("    signal list                show all signal policies");
+        println!(
             "  {} (l)              show source at current PC",
             "list".bold()
         );
@@ -431,6 +602,31 @@ mod linux {
             StopReason::Signal(sig) => {
                 println!("  received signal: {:?}", sig);
             }
+            StopReason::SyscallEntry { number, args } => {
+                let name = rnicro::syscall::name(*number)
+                    .unwrap_or("unknown");
+                println!(
+                    "  {} {}({}) [{}]",
+                    "syscall entry:".yellow(),
+                    name.bold(),
+                    format_syscall_args(args),
+                    number,
+                );
+            }
+            StopReason::SyscallExit { number, retval } => {
+                let name = rnicro::syscall::name(*number)
+                    .unwrap_or("unknown");
+                println!(
+                    "  {} {}() = {}",
+                    "syscall exit:".yellow(),
+                    name.bold(),
+                    if *retval < 0 {
+                        format!("{} ({})", retval, retval).red().to_string()
+                    } else {
+                        format!("{}", retval)
+                    },
+                );
+            }
             StopReason::Exited(code) => {
                 println!("  process exited with code {}", code);
             }
@@ -441,6 +637,13 @@ mod linux {
                 println!("  new thread created: {}", pid);
             }
         }
+    }
+
+    fn format_syscall_args(args: &[u64; 6]) -> String {
+        args.iter()
+            .map(|a| format!("0x{:x}", a))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     /// Print source location and function name (if available).

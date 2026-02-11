@@ -24,6 +24,8 @@ pub struct Process {
     state: ProcessState,
     terminate_on_end: bool,
     is_attached: bool,
+    /// Tracks whether we're between syscall entry and exit.
+    expecting_syscall_exit: bool,
 }
 
 impl Process {
@@ -83,10 +85,11 @@ impl Process {
                     }
                 }
 
-                // Set ptrace options for tracking clones/forks/execs
+                // Set ptrace options for tracking clones/forks/execs and syscall stops
                 ptrace::setoptions(
                     child,
-                    ptrace::Options::PTRACE_O_TRACECLONE,
+                    ptrace::Options::PTRACE_O_TRACECLONE
+                        | ptrace::Options::PTRACE_O_TRACESYSGOOD,
                 )?;
 
                 Ok(Process {
@@ -94,6 +97,7 @@ impl Process {
                     state: ProcessState::Stopped,
                     terminate_on_end: true,
                     is_attached: true,
+                    expecting_syscall_exit: false,
                 })
             }
         }
@@ -115,13 +119,18 @@ impl Process {
             }
         }
 
-        ptrace::setoptions(pid, ptrace::Options::PTRACE_O_TRACECLONE)?;
+        ptrace::setoptions(
+            pid,
+            ptrace::Options::PTRACE_O_TRACECLONE
+                | ptrace::Options::PTRACE_O_TRACESYSGOOD,
+        )?;
 
         Ok(Process {
             pid,
             state: ProcessState::Stopped,
             terminate_on_end: false,
             is_attached: true,
+            expecting_syscall_exit: false,
         })
     }
 
@@ -135,6 +144,13 @@ impl Process {
     /// Resume execution, delivering a signal to the tracee.
     pub fn resume_with_signal(&mut self, sig: Signal) -> Result<()> {
         ptrace::cont(self.pid, Some(sig))?;
+        self.state = ProcessState::Running;
+        Ok(())
+    }
+
+    /// Resume execution, stopping at the next syscall entry/exit.
+    pub fn resume_with_syscall_trap(&mut self, sig: Option<Signal>) -> Result<()> {
+        ptrace::syscall(self.pid, sig)?;
         self.state = ProcessState::Running;
         Ok(())
     }
@@ -169,6 +185,10 @@ impl Process {
                 self.state = ProcessState::Terminated;
                 self.is_attached = false;
                 StopReason::Terminated(sig)
+            }
+            WaitStatus::PtraceSyscall(_) => {
+                self.state = ProcessState::Stopped;
+                self.classify_syscall()?
             }
             WaitStatus::PtraceEvent(_, _, event) => {
                 self.state = ProcessState::Stopped;
@@ -227,6 +247,24 @@ impl Process {
     /// Get the current process state.
     pub fn state(&self) -> ProcessState {
         self.state
+    }
+
+    /// Classify a syscall stop as entry or exit.
+    fn classify_syscall(&mut self) -> Result<StopReason> {
+        let regs = ptrace::getregs(self.pid)?;
+        if self.expecting_syscall_exit {
+            self.expecting_syscall_exit = false;
+            Ok(StopReason::SyscallExit {
+                number: regs.orig_rax,
+                retval: regs.rax as i64,
+            })
+        } else {
+            self.expecting_syscall_exit = true;
+            Ok(StopReason::SyscallEntry {
+                number: regs.orig_rax,
+                args: [regs.rdi, regs.rsi, regs.rdx, regs.r10, regs.r8, regs.r9],
+            })
+        }
     }
 
     /// Classify a SIGTRAP into a more specific stop reason.

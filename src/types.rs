@@ -50,6 +50,16 @@ pub enum StopReason {
     SingleStep,
     /// Received a signal (other than SIGTRAP).
     Signal(nix::sys::signal::Signal),
+    /// Stopped at a syscall entry.
+    SyscallEntry {
+        number: u64,
+        args: [u64; 6],
+    },
+    /// Stopped at a syscall exit.
+    SyscallExit {
+        number: u64,
+        retval: i64,
+    },
     /// Process exited normally.
     Exited(i32),
     /// Process was killed by a signal.

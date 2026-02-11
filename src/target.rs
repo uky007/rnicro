@@ -16,7 +16,27 @@ use crate::registers::{self, Registers};
 use crate::types::{ProcessState, StopReason, VirtAddr};
 use crate::unwind::Unwinder;
 
+use nix::sys::signal::Signal;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+
+/// Per-signal handling policy.
+#[derive(Debug, Clone, Copy)]
+pub struct SignalPolicy {
+    /// Stop execution when this signal is received.
+    pub stop: bool,
+    /// Pass (deliver) the signal to the tracee on resume.
+    pub pass: bool,
+}
+
+impl Default for SignalPolicy {
+    fn default() -> Self {
+        SignalPolicy {
+            stop: true,
+            pass: false,
+        }
+    }
+}
 
 /// A frame in the backtrace, enriched with symbol and source info.
 #[derive(Debug)]
@@ -39,6 +59,14 @@ pub struct Target {
     elf: ElfFile,
     dwarf: Option<DwarfInfo>,
     unwinder: Option<Unwinder>,
+    /// Per-signal handling policy.
+    signal_policies: HashMap<Signal, SignalPolicy>,
+    /// Signal to deliver on the next resume (set when policy says "pass").
+    pending_signal: Option<Signal>,
+    /// Set of syscall numbers being caught (empty = not catching).
+    caught_syscalls: HashSet<u64>,
+    /// Whether to catch all syscalls.
+    catch_all_syscalls: bool,
 }
 
 impl Target {
@@ -55,6 +83,10 @@ impl Target {
             elf,
             dwarf,
             unwinder,
+            signal_policies: HashMap::new(),
+            pending_signal: None,
+            caught_syscalls: HashSet::new(),
+            catch_all_syscalls: false,
         })
     }
 
@@ -72,17 +104,45 @@ impl Target {
             elf,
             dwarf,
             unwinder,
+            signal_policies: HashMap::new(),
+            pending_signal: None,
+            caught_syscalls: HashSet::new(),
+            catch_all_syscalls: false,
         })
     }
 
     // ── Execution control ──────────────────────────────────────────
 
     /// Continue execution until the next stop event.
+    ///
+    /// Delivers a pending signal if one was stored by the signal policy.
+    /// Uses PTRACE_SYSCALL instead of PTRACE_CONT when syscall catching is active.
     pub fn resume(&mut self) -> Result<StopReason> {
-        self.process.resume()?;
-        let reason = self.process.wait_on_signal()?;
-        self.handle_stop(&reason)?;
-        Ok(reason)
+        loop {
+            let sig = self.pending_signal.take();
+            if self.catch_all_syscalls || !self.caught_syscalls.is_empty() {
+                self.process.resume_with_syscall_trap(sig)?;
+            } else if let Some(s) = sig {
+                self.process.resume_with_signal(s)?;
+            } else {
+                self.process.resume()?;
+            }
+            let reason = self.process.wait_on_signal()?;
+            self.handle_stop(&reason)?;
+
+            // Auto-continue for uncaught syscalls
+            match &reason {
+                StopReason::SyscallEntry { number, .. }
+                | StopReason::SyscallExit { number, .. } => {
+                    if !self.catch_all_syscalls && !self.caught_syscalls.contains(number) {
+                        continue; // Not a caught syscall, keep going
+                    }
+                }
+                _ => {}
+            }
+
+            return Ok(reason);
+        }
     }
 
     /// Execute a single machine instruction.
@@ -382,14 +442,61 @@ impl Target {
 
     // ── Internal ───────────────────────────────────────────────────
 
-    /// Handle a stop event (e.g., adjust PC after breakpoint hit).
+    /// Handle a stop event (adjust PC, apply signal policy).
     fn handle_stop(&mut self, reason: &StopReason) -> Result<()> {
-        if let StopReason::BreakpointHit { addr } = reason {
-            let mut regs = self.read_registers()?;
-            regs.set_pc(addr.addr());
-            self.write_registers(&regs)?;
+        match reason {
+            StopReason::BreakpointHit { addr } => {
+                let mut regs = self.read_registers()?;
+                regs.set_pc(addr.addr());
+                self.write_registers(&regs)?;
+            }
+            StopReason::Signal(sig) => {
+                let policy = self.signal_policy(*sig);
+                if policy.pass {
+                    self.pending_signal = Some(*sig);
+                }
+            }
+            _ => {}
         }
         Ok(())
+    }
+
+    /// Get the signal handling policy for a signal.
+    pub fn signal_policy(&self, sig: Signal) -> SignalPolicy {
+        self.signal_policies
+            .get(&sig)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Set the signal handling policy for a signal.
+    pub fn set_signal_policy(&mut self, sig: Signal, policy: SignalPolicy) {
+        self.signal_policies.insert(sig, policy);
+    }
+
+    /// Add a syscall to the catch set by number.
+    pub fn catch_syscall(&mut self, number: u64) {
+        self.caught_syscalls.insert(number);
+    }
+
+    /// Remove a syscall from the catch set.
+    pub fn uncatch_syscall(&mut self, number: u64) {
+        self.caught_syscalls.remove(&number);
+    }
+
+    /// Enable or disable catching all syscalls.
+    pub fn set_catch_all_syscalls(&mut self, enable: bool) {
+        self.catch_all_syscalls = enable;
+    }
+
+    /// Check if syscall catching is active.
+    pub fn is_catching_syscalls(&self) -> bool {
+        self.catch_all_syscalls || !self.caught_syscalls.is_empty()
+    }
+
+    /// Get the set of caught syscall numbers.
+    pub fn caught_syscalls(&self) -> &HashSet<u64> {
+        &self.caught_syscalls
     }
 
     /// Build a DWARF register snapshot from the current register values.
