@@ -34,4 +34,6 @@ pub mod registers;
 #[cfg(target_os = "linux")]
 pub mod breakpoint;
 #[cfg(target_os = "linux")]
+pub mod watchpoint;
+#[cfg(target_os = "linux")]
 pub mod target;

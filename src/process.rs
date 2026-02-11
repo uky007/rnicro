@@ -18,6 +18,66 @@ use crate::error::{Error, Result};
 use crate::pipe::Channel;
 use crate::types::{ProcessState, StopReason, VirtAddr};
 
+// ── Debug register access via PTRACE_PEEKUSER / PTRACE_POKEUSER ──────
+
+/// Offset of `u_debugreg` within `struct user` (bytes).
+fn debug_reg_offset(reg: usize) -> u64 {
+    // offsetof(struct user, u_debugreg) + reg * 8
+    // On x86_64, u_debugreg starts at offset 848 in struct user.
+    const U_DEBUGREG_OFFSET: u64 = 848;
+    U_DEBUGREG_OFFSET + (reg as u64) * 8
+}
+
+/// Read a debug register (DR0–DR7) from the tracee.
+pub fn read_debug_reg(pid: Pid, reg: usize) -> Result<u64> {
+    if reg > 7 || reg == 4 || reg == 5 {
+        return Err(Error::Other(format!("invalid debug register: DR{}", reg)));
+    }
+    let offset = debug_reg_offset(reg);
+    let val = unsafe {
+        libc::ptrace(
+            libc::PTRACE_PEEKUSER,
+            pid.as_raw() as libc::c_uint,
+            offset as *mut libc::c_void,
+            std::ptr::null_mut::<libc::c_void>(),
+        )
+    };
+    if val == -1 {
+        let errno = nix::errno::Errno::last();
+        if errno != nix::errno::Errno::UnknownErrno {
+            return Err(Error::Other(format!(
+                "PTRACE_PEEKUSER DR{}: {}",
+                reg, errno
+            )));
+        }
+    }
+    Ok(val as u64)
+}
+
+/// Write a debug register (DR0–DR7) in the tracee.
+pub fn write_debug_reg(pid: Pid, reg: usize, value: u64) -> Result<()> {
+    if reg > 7 || reg == 4 || reg == 5 {
+        return Err(Error::Other(format!("invalid debug register: DR{}", reg)));
+    }
+    let offset = debug_reg_offset(reg);
+    let ret = unsafe {
+        libc::ptrace(
+            libc::PTRACE_POKEUSER,
+            pid.as_raw() as libc::c_uint,
+            offset as *mut libc::c_void,
+            value as *mut libc::c_void,
+        )
+    };
+    if ret == -1 {
+        let errno = nix::errno::Errno::last();
+        return Err(Error::Other(format!(
+            "PTRACE_POKEUSER DR{}: {}",
+            reg, errno
+        )));
+    }
+    Ok(())
+}
+
 /// A debugged process controlled via ptrace.
 pub struct Process {
     pid: Pid,
@@ -282,6 +342,24 @@ impl Process {
             }
             // TRAP_TRACE (2): single-step
             2 => Ok(StopReason::SingleStep),
+            // TRAP_HWBKPT (4): hardware watchpoint/breakpoint
+            4 => {
+                // Read DR6 to find which slot triggered
+                let dr6 = read_debug_reg(self.pid, 6)?;
+                for i in 0..4 {
+                    if dr6 & (1 << i) != 0 {
+                        let addr = read_debug_reg(self.pid, i)?;
+                        // Clear DR6 status bits
+                        write_debug_reg(self.pid, 6, 0)?;
+                        return Ok(StopReason::WatchpointHit {
+                            slot: i,
+                            addr: VirtAddr(addr),
+                        });
+                    }
+                }
+                // DR6 didn't identify a slot; treat as single-step
+                Ok(StopReason::SingleStep)
+            }
             _ => Ok(StopReason::SingleStep),
         }
     }

@@ -15,6 +15,7 @@ use crate::procfs::{self, MemoryRegion};
 use crate::registers::{self, Registers};
 use crate::types::{ProcessState, StopReason, VirtAddr};
 use crate::unwind::Unwinder;
+use crate::watchpoint::{WatchpointManager, WatchpointType, WatchpointSize, Watchpoint};
 
 use nix::sys::signal::Signal;
 use std::collections::{HashMap, HashSet};
@@ -55,6 +56,7 @@ pub struct BacktraceFrame {
 pub struct Target {
     process: Process,
     breakpoints: BreakpointManager,
+    watchpoints: WatchpointManager,
     program_path: String,
     elf: ElfFile,
     dwarf: Option<DwarfInfo>,
@@ -80,6 +82,7 @@ impl Target {
             program_path: program.to_string_lossy().into_owned(),
             process,
             breakpoints: BreakpointManager::new(),
+            watchpoints: WatchpointManager::new(),
             elf,
             dwarf,
             unwinder,
@@ -101,6 +104,7 @@ impl Target {
             program_path: exe_path,
             process,
             breakpoints: BreakpointManager::new(),
+            watchpoints: WatchpointManager::new(),
             elf,
             dwarf,
             unwinder,
@@ -334,6 +338,29 @@ impl Target {
     /// List all breakpoints.
     pub fn list_breakpoints(&self) -> Vec<VirtAddr> {
         self.breakpoints.list().map(|s| s.addr()).collect()
+    }
+
+    // ── Watchpoints ─────────────────────────────────────────────────
+
+    /// Set a hardware watchpoint.
+    pub fn set_watchpoint(
+        &mut self,
+        addr: VirtAddr,
+        wp_type: WatchpointType,
+        size: WatchpointSize,
+    ) -> Result<u32> {
+        self.watchpoints
+            .set(self.process.pid(), addr, wp_type, size)
+    }
+
+    /// Remove a watchpoint by ID.
+    pub fn remove_watchpoint(&mut self, id: u32) -> Result<()> {
+        self.watchpoints.remove(self.process.pid(), id)
+    }
+
+    /// List all active watchpoints.
+    pub fn list_watchpoints(&self) -> Vec<&Watchpoint> {
+        self.watchpoints.list()
     }
 
     // ── Registers ──────────────────────────────────────────────────

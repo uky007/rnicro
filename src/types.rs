@@ -50,6 +50,11 @@ pub enum StopReason {
     SingleStep,
     /// Received a signal (other than SIGTRAP).
     Signal(nix::sys::signal::Signal),
+    /// Hit a hardware watchpoint.
+    WatchpointHit {
+        slot: usize,
+        addr: VirtAddr,
+    },
     /// Stopped at a syscall entry.
     SyscallEntry {
         number: u64,

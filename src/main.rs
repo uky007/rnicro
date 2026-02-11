@@ -105,6 +105,7 @@ mod linux {
             "memory" | "mem" | "x" => cmd_memory(target, args),
             "disassemble" | "disas" | "d" => cmd_disassemble(target, args),
             "backtrace" | "bt" => cmd_backtrace(target),
+            "watchpoint" | "watch" | "wp" => cmd_watchpoint(target, args),
             "catchpoint" | "catch" => cmd_catchpoint(target, args),
             "signal" | "sig" => cmd_signal(target, args),
             "list" | "l" => cmd_list(target),
@@ -300,6 +301,69 @@ mod linux {
         };
 
         print!("{}", disasm::format_disassembly(&insns));
+        Ok(())
+    }
+
+    fn cmd_watchpoint(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        use rnicro::watchpoint::{WatchpointSize, WatchpointType};
+
+        match args.first().copied() {
+            Some("set") | Some("s") => {
+                if args.len() < 4 {
+                    println!("usage: watchpoint set <address> <write|rw|execute> <size>");
+                    println!("  size: 1, 2, 4, or 8 bytes");
+                    return Ok(());
+                }
+                let addr = resolve_address(target, args[1])?;
+                let wp_type = match args[2] {
+                    "write" | "w" => WatchpointType::Write,
+                    "rw" | "readwrite" => WatchpointType::ReadWrite,
+                    "execute" | "exec" | "x" => WatchpointType::Execute,
+                    other => {
+                        println!("unknown watchpoint type: {} (use write|rw|execute)", other);
+                        return Ok(());
+                    }
+                };
+                let size_val: usize = args[3].parse().map_err(|_| {
+                    anyhow::anyhow!("invalid size: {} (use 1, 2, 4, or 8)", args[3])
+                })?;
+                let size = WatchpointSize::from_bytes(size_val).ok_or_else(|| {
+                    anyhow::anyhow!("invalid size: {} (must be 1, 2, 4, or 8)", size_val)
+                })?;
+                let id = target.set_watchpoint(addr, wp_type, size)?;
+                println!(
+                    "  watchpoint #{} set at {} ({}, {} bytes)",
+                    id, addr, wp_type, size
+                );
+            }
+            Some("delete") | Some("d") => {
+                if args.len() < 2 {
+                    println!("usage: watchpoint delete <id>");
+                    return Ok(());
+                }
+                let id: u32 = args[1]
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("invalid id: {}", args[1]))?;
+                target.remove_watchpoint(id)?;
+                println!("  watchpoint #{} removed", id);
+            }
+            Some("list") | Some("l") | None => {
+                let wps = target.list_watchpoints();
+                if wps.is_empty() {
+                    println!("  no watchpoints set");
+                } else {
+                    for wp in &wps {
+                        println!(
+                            "  #{}: {} ({}, {} bytes) [slot {}]",
+                            wp.id, wp.addr, wp.wp_type, wp.size, wp.slot
+                        );
+                    }
+                }
+            }
+            Some(sub) => {
+                println!("unknown watchpoint subcommand: {}", sub);
+            }
+        }
         Ok(())
     }
 
@@ -568,6 +632,13 @@ mod linux {
             "backtrace".bold()
         );
         println!(
+            "  {} (wp)       hardware watchpoints",
+            "watchpoint".bold()
+        );
+        println!("    watchpoint set <a> <t> <s> set watchpoint (type: write|rw|execute, size: 1|2|4|8)");
+        println!("    watchpoint delete <id>     remove watchpoint");
+        println!("    watchpoint list            list watchpoints");
+        println!(
             "  {} (catch)    manage syscall catchpoints",
             "catchpoint".bold()
         );
@@ -625,6 +696,14 @@ mod linux {
                     } else {
                         format!("{}", retval)
                     },
+                );
+            }
+            StopReason::WatchpointHit { slot, addr } => {
+                println!(
+                    "  {} at {} (slot {})",
+                    "watchpoint hit".yellow(),
+                    addr,
+                    slot,
                 );
             }
             StopReason::Exited(code) => {
