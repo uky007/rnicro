@@ -23,6 +23,7 @@ pub mod procfs;
 pub mod disasm;
 pub mod elf;
 pub mod dwarf;
+pub mod unwind;
 
 // Linux-only modules (ptrace, user_regs_struct, etc.)
 #[cfg(target_os = "linux")]

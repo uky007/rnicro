@@ -104,6 +104,7 @@ mod linux {
             "breakpoint" | "break" | "b" => cmd_breakpoint(target, args),
             "memory" | "mem" | "x" => cmd_memory(target, args),
             "disassemble" | "disas" | "d" => cmd_disassemble(target, args),
+            "backtrace" | "bt" => cmd_backtrace(target),
             "list" | "l" => cmd_list(target),
             "help" | "h" => cmd_help(),
             "quit" | "q" => std::process::exit(0),
@@ -300,6 +301,32 @@ mod linux {
         Ok(())
     }
 
+    fn cmd_backtrace(target: &mut Target) -> anyhow::Result<()> {
+        match target.backtrace() {
+            Ok(frames) => {
+                for frame in &frames {
+                    print!("  #{:<3} {}", frame.index, format!("0x{:016x}", frame.pc.addr()).cyan());
+                    if let Some(func) = &frame.function {
+                        print!(" in {}", func.bold());
+                    }
+                    if let Some(loc) = &frame.location {
+                        print!(" at {}", loc);
+                    }
+                    println!();
+                }
+                if frames.is_empty() {
+                    println!("  {}", "empty backtrace".yellow());
+                }
+            }
+            Err(e) => {
+                // Fallback: show at least the current PC
+                let regs = target.read_registers()?;
+                println!("  #0   {} (unwind failed: {})", format!("0x{:016x}", regs.pc()).cyan(), e);
+            }
+        }
+        Ok(())
+    }
+
     fn cmd_list(target: &mut Target) -> anyhow::Result<()> {
         if let Ok(Some(loc)) = target.source_location() {
             println!(
@@ -379,6 +406,10 @@ mod linux {
         );
         println!("    disassemble [addr] [N] disassemble N instructions");
         println!("    disassemble --att     use AT&T syntax");
+        println!(
+            "  {} (bt)         show call stack",
+            "backtrace".bold()
+        );
         println!(
             "  {} (l)              show source at current PC",
             "list".bold()

@@ -2,19 +2,34 @@
 //!
 //! Corresponds to sdb's target.hpp/cpp.
 //! Integrates process control, breakpoints, registers, ELF/DWARF info,
-//! and source-level stepping into a unified interface used by the CLI.
+//! stack unwinding, and source-level stepping into a unified interface
+//! used by the CLI.
 
 use crate::breakpoint::BreakpointManager;
 use crate::disasm::{self, DisasmInstruction, DisasmStyle};
 use crate::dwarf::{DwarfInfo, SourceLocation};
 use crate::elf::ElfFile;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::process::Process;
 use crate::procfs::{self, MemoryRegion};
-use crate::registers::Registers;
+use crate::registers::{self, Registers};
 use crate::types::{ProcessState, StopReason, VirtAddr};
+use crate::unwind::Unwinder;
 
 use std::path::Path;
+
+/// A frame in the backtrace, enriched with symbol and source info.
+#[derive(Debug)]
+pub struct BacktraceFrame {
+    /// Frame number (0 = innermost).
+    pub index: usize,
+    /// Instruction pointer for this frame.
+    pub pc: VirtAddr,
+    /// Function name (from ELF symbols or DWARF).
+    pub function: Option<String>,
+    /// Source location (from DWARF line tables).
+    pub location: Option<SourceLocation>,
+}
 
 /// The main debugger session, owning the process and all debug state.
 pub struct Target {
@@ -23,6 +38,7 @@ pub struct Target {
     program_path: String,
     elf: ElfFile,
     dwarf: Option<DwarfInfo>,
+    unwinder: Option<Unwinder>,
 }
 
 impl Target {
@@ -30,14 +46,15 @@ impl Target {
     pub fn launch(program: &Path, args: &[&str]) -> Result<Self> {
         let process = Process::launch(program, args)?;
         let elf = ElfFile::load(program)?;
-        // DWARF info is optional: stripped binaries still work
         let dwarf = DwarfInfo::load(program).ok();
+        let unwinder = Unwinder::load(program).ok();
         Ok(Target {
             program_path: program.to_string_lossy().into_owned(),
             process,
             breakpoints: BreakpointManager::new(),
             elf,
             dwarf,
+            unwinder,
         })
     }
 
@@ -47,12 +64,14 @@ impl Target {
         let exe_path = format!("/proc/{}/exe", pid);
         let elf = ElfFile::load(Path::new(&exe_path))?;
         let dwarf = DwarfInfo::load(Path::new(&exe_path)).ok();
+        let unwinder = Unwinder::load(Path::new(&exe_path)).ok();
         Ok(Target {
             program_path: exe_path,
             process,
             breakpoints: BreakpointManager::new(),
             elf,
             dwarf,
+            unwinder,
         })
     }
 
@@ -68,7 +87,6 @@ impl Target {
 
     /// Execute a single machine instruction.
     pub fn step_instruction(&mut self) -> Result<StopReason> {
-        // If we're sitting on a breakpoint, step over it first
         let pc = VirtAddr(self.read_registers()?.pc());
         if self.breakpoints.get_at(pc).is_some() {
             self.breakpoints.step_over_breakpoint(&mut self.process, pc)?;
@@ -82,8 +100,6 @@ impl Target {
     }
 
     /// Source-level step into: keep stepping until the source line changes.
-    ///
-    /// If no debug info is available, behaves like `step_instruction`.
     pub fn step_in(&mut self) -> Result<StopReason> {
         let start_loc = self.source_location()?;
 
@@ -92,11 +108,9 @@ impl Target {
             match &reason {
                 StopReason::SingleStep => {
                     let current_loc = self.source_location()?;
-                    // If no debug info, return after a single step
                     if start_loc.is_none() || current_loc != start_loc {
                         return Ok(reason);
                     }
-                    // Same line — keep stepping
                 }
                 _ => return Ok(reason),
             }
@@ -104,10 +118,6 @@ impl Target {
     }
 
     /// Source-level step over: step one source line, skipping over calls.
-    ///
-    /// When the current instruction is a CALL, sets a temporary breakpoint
-    /// at the return site and continues execution rather than stepping into
-    /// the called function.
     pub fn step_over(&mut self) -> Result<StopReason> {
         let start_loc = self.source_location()?;
 
@@ -119,7 +129,6 @@ impl Target {
                 if info.is_call {
                     let return_pc = VirtAddr(pc.addr() + info.len as u64);
                     let already_has_bp = self.breakpoints.get_at(return_pc).is_some();
-
                     if !already_has_bp {
                         self.set_breakpoint(return_pc)?;
                     }
@@ -134,14 +143,13 @@ impl Target {
                             if start_loc.is_none() || current_loc != start_loc {
                                 return Ok(reason);
                             }
-                            continue; // Same line, keep stepping
+                            continue;
                         }
-                        _ => return Ok(reason), // Stopped elsewhere
+                        _ => return Ok(reason),
                     }
                 }
             }
 
-            // Not a CALL (or decode failed): single-step
             let reason = self.step_instruction()?;
             match &reason {
                 StopReason::SingleStep => {
@@ -157,22 +165,38 @@ impl Target {
 
     /// Step out: continue until the current function returns.
     ///
-    /// Reads the return address from the stack frame (via frame pointer).
-    /// Requires the binary to be compiled with frame pointers (`-fno-omit-frame-pointer`).
+    /// Uses DWARF CFI to find the return address when available,
+    /// falling back to frame pointers (rbp) otherwise.
     pub fn step_out(&mut self) -> Result<StopReason> {
         let regs = self.read_registers()?;
-        let rbp = regs.get("rbp")?;
+        let pc = regs.pc();
 
-        if rbp == 0 {
-            return Err(crate::error::Error::Other(
-                "cannot step out: no frame pointer (rbp=0)".into(),
-            ));
-        }
+        // Try CFI-based return address first
+        let ret_addr = if let Some(unwinder) = &self.unwinder {
+            let dwarf_regs = self.dwarf_register_snapshot(&regs);
+            unwinder.return_address(
+                pc,
+                &dwarf_regs,
+                &|addr, len| self.process.read_memory(VirtAddr(addr), len),
+            )?
+        } else {
+            None
+        };
 
-        // On x86_64 with frame pointers, return address is at [rbp + 8]
-        let ret_addr_bytes = self.read_memory(VirtAddr(rbp + 8), 8)?;
-        let ret_addr = u64::from_le_bytes(ret_addr_bytes[..8].try_into().unwrap());
-        let ret_addr = VirtAddr(ret_addr);
+        let ret_addr = match ret_addr {
+            Some(addr) => VirtAddr(addr),
+            None => {
+                // Fallback: frame pointer method
+                let rbp = regs.get("rbp")?;
+                if rbp == 0 {
+                    return Err(Error::Other(
+                        "cannot step out: no CFI data and no frame pointer".into(),
+                    ));
+                }
+                let bytes = self.read_memory(VirtAddr(rbp + 8), 8)?;
+                VirtAddr(u64::from_le_bytes(bytes[..8].try_into().unwrap()))
+            }
+        };
 
         let already_has_bp = self.breakpoints.get_at(ret_addr).is_some();
         if !already_has_bp {
@@ -184,6 +208,55 @@ impl Target {
         }
 
         Ok(reason)
+    }
+
+    // ── Stack unwinding ────────────────────────────────────────────
+
+    /// Walk the call stack and return a backtrace.
+    ///
+    /// Each frame includes the PC, function name, and source location
+    /// when available.
+    pub fn backtrace(&self) -> Result<Vec<BacktraceFrame>> {
+        let regs = self.read_registers()?;
+        let pc = regs.pc();
+
+        let unwinder = self
+            .unwinder
+            .as_ref()
+            .ok_or_else(|| Error::Other("no unwind info available".into()))?;
+
+        let dwarf_regs = self.dwarf_register_snapshot(&regs);
+        let raw_frames = unwinder.walk_stack(
+            pc,
+            &dwarf_regs,
+            &|addr, len| self.process.read_memory(VirtAddr(addr), len),
+        )?;
+
+        let mut bt = Vec::with_capacity(raw_frames.len());
+        for (i, frame) in raw_frames.iter().enumerate() {
+            let function = self
+                .elf
+                .find_symbol_at(frame.pc)
+                .map(|s| s.name.clone())
+                .or_else(|| {
+                    self.dwarf
+                        .as_ref()
+                        .and_then(|d| d.find_function(frame.pc).ok().flatten())
+                });
+            let location = self
+                .dwarf
+                .as_ref()
+                .and_then(|d| d.find_location(frame.pc).ok().flatten());
+
+            bt.push(BacktraceFrame {
+                index: i,
+                pc: frame.pc,
+                function,
+                location,
+            });
+        }
+
+        Ok(bt)
     }
 
     // ── Breakpoints ────────────────────────────────────────────────
@@ -264,15 +337,11 @@ impl Target {
     }
 
     /// Get the function name at the current PC.
-    ///
-    /// Tries the ELF symbol table first, then falls back to DWARF info.
     pub fn current_function(&self) -> Result<Option<String>> {
         let pc = VirtAddr(self.read_registers()?.pc());
-        // ELF symbols (works even without debug info)
         if let Some(sym) = self.elf.find_symbol_at(pc) {
             return Ok(Some(sym.name.clone()));
         }
-        // DWARF function info (handles inlined functions)
         if let Some(dwarf) = &self.dwarf {
             return dwarf.find_function(pc);
         }
@@ -316,11 +385,20 @@ impl Target {
     /// Handle a stop event (e.g., adjust PC after breakpoint hit).
     fn handle_stop(&mut self, reason: &StopReason) -> Result<()> {
         if let StopReason::BreakpointHit { addr } = reason {
-            // Set RIP back to the breakpoint address (INT3 advanced it by 1)
             let mut regs = self.read_registers()?;
             regs.set_pc(addr.addr());
             self.write_registers(&regs)?;
         }
         Ok(())
+    }
+
+    /// Build a DWARF register snapshot from the current register values.
+    /// Returns (DWARF register number, value) pairs for use with the unwinder.
+    fn dwarf_register_snapshot(&self, regs: &Registers) -> Vec<(u16, u64)> {
+        registers::REGISTERS
+            .iter()
+            .filter(|r| r.dwarf_id >= 0)
+            .filter_map(|r| regs.get(r.name).ok().map(|v| (r.dwarf_id as u16, v)))
+            .collect()
     }
 }
