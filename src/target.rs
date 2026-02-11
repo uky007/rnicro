@@ -7,6 +7,7 @@
 use crate::breakpoint::BreakpointManager;
 use crate::error::Result;
 use crate::process::Process;
+use crate::procfs::{self, MemoryRegion};
 use crate::registers::Registers;
 use crate::types::{ProcessState, StopReason, VirtAddr};
 
@@ -106,6 +107,11 @@ impl Target {
     /// List all breakpoints.
     pub fn list_breakpoints(&self) -> Vec<VirtAddr> {
         self.breakpoints.list().map(|s| s.addr()).collect()
+    }
+
+    /// Read the tracee's memory maps from `/proc/pid/maps`.
+    pub fn memory_maps(&self) -> Result<Vec<MemoryRegion>> {
+        procfs::read_memory_maps(self.process.pid())
     }
 
     /// Handle a stop event (e.g., adjust PC after breakpoint hit).

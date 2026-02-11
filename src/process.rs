@@ -1,8 +1,11 @@
 //! Process control via ptrace.
 //!
-//! Corresponds to sdb's process.hpp/cpp and book Ch.3 (Attaching to a Process).
+//! Corresponds to sdb's process.hpp/cpp and book Ch.3-4
+//! (Attaching to a Process; Pipes, procfs, and Automated Testing).
+//!
 //! Handles launching/attaching to a tracee, waiting for events,
 //! and basic execution control (continue, single-step).
+//! Uses a pipe to synchronize fork/exec (Ch.4 pattern).
 
 use nix::sys::ptrace;
 use nix::sys::signal::Signal;
@@ -12,6 +15,7 @@ use std::ffi::CString;
 use std::path::Path;
 
 use crate::error::{Error, Result};
+use crate::pipe::Channel;
 use crate::types::{ProcessState, StopReason, VirtAddr};
 
 /// A debugged process controlled via ptrace.
@@ -25,8 +29,9 @@ pub struct Process {
 impl Process {
     /// Launch a new process under ptrace control.
     ///
-    /// Forks, calls PTRACE_TRACEME in the child, then execs the given program.
-    /// The parent waits for the initial SIGTRAP (caused by exec) before returning.
+    /// Forks, calls `PTRACE_TRACEME` in the child, then execs the given program.
+    /// A pipe synchronizes the parent and child so that `traceme` is guaranteed
+    /// to complete before the parent calls `waitpid` (Ch.4 pattern from sdb).
     pub fn launch(program: &Path, args: &[&str]) -> Result<Self> {
         let prog = CString::new(program.to_str().ok_or_else(|| {
             Error::Process("invalid program path".into())
@@ -38,16 +43,33 @@ impl Process {
             .collect();
         let c_args_ref: Vec<&std::ffi::CStr> = c_args.iter().map(|a| a.as_c_str()).collect();
 
+        // Pipe for synchronization: child notifies parent after traceme
+        let channel = Channel::new()?;
+
         match unsafe { fork() }.map_err(|e| Error::Process(e.to_string()))? {
             ForkResult::Child => {
-                // Child: request tracing, then exec
+                channel.close_read();
+
+                // Request tracing
                 ptrace::traceme()?;
+
+                // Notify parent that traceme succeeded
+                let _ = channel.notify();
+                channel.close_write();
+
+                // Replace process image
                 execvp(&prog, &c_args_ref)
                     .map_err(|e| Error::Process(format!("execvp failed: {}", e)))?;
                 unreachable!();
             }
             ForkResult::Parent { child } => {
-                // Parent: wait for the child to stop at exec
+                channel.close_write();
+
+                // Wait for child to complete traceme before proceeding
+                channel.wait()?;
+                channel.close_read();
+
+                // Wait for the child to stop at exec (SIGTRAP)
                 let status = waitpid(child, None)
                     .map_err(|e| Error::Process(format!("waitpid failed: {}", e)))?;
 

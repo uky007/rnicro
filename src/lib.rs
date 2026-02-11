@@ -8,14 +8,25 @@
 //!
 //! - [`error`] — Error types used throughout the crate.
 //! - [`types`] — Core types: `VirtAddr`, `StopReason`, `ProcessState`.
+//! - [`pipe`] — Fork/exec synchronization pipe (Ch.4).
+//! - [`procfs`] — Linux procfs utilities: `/proc/pid/maps`, etc. (Ch.4).
 //! - [`process`] — Process control via ptrace (launch, attach, continue, step).
 //! - [`registers`] — x86_64 register read/write with a table-driven design.
 //! - [`breakpoint`] — Software breakpoint management (INT3 patching).
 //! - [`target`] — High-level debugger API integrating all components.
 
+// Platform-independent modules
 pub mod error;
 pub mod types;
+pub mod pipe;
+pub mod procfs;
+
+// Linux-only modules (ptrace, user_regs_struct, etc.)
+#[cfg(target_os = "linux")]
 pub mod process;
+#[cfg(target_os = "linux")]
 pub mod registers;
+#[cfg(target_os = "linux")]
 pub mod breakpoint;
+#[cfg(target_os = "linux")]
 pub mod target;
