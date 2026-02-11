@@ -20,6 +20,7 @@ pub mod error;
 pub mod types;
 pub mod pipe;
 pub mod procfs;
+pub mod disasm;
 
 // Linux-only modules (ptrace, user_regs_struct, etc.)
 #[cfg(target_os = "linux")]

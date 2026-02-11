@@ -17,6 +17,7 @@ mod linux {
     use colored::Colorize;
     use rustyline::DefaultEditor;
 
+    use rnicro::disasm::{self, DisasmStyle};
     use rnicro::target::Target;
     use rnicro::types::{ProcessState, StopReason, VirtAddr};
 
@@ -94,6 +95,7 @@ mod linux {
             "register" | "reg" | "r" => cmd_register(target, args),
             "breakpoint" | "break" | "b" => cmd_breakpoint(target, args),
             "memory" | "mem" | "x" => cmd_memory(target, args),
+            "disassemble" | "disas" | "d" => cmd_disassemble(target, args),
             "help" | "h" => cmd_help(),
             "quit" | "q" => std::process::exit(0),
             _ => {
@@ -236,6 +238,30 @@ mod linux {
         Ok(())
     }
 
+    fn cmd_disassemble(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        let count: usize = args
+            .iter()
+            .find(|a| a.starts_with("-c"))
+            .and_then(|_| args.iter().find_map(|a| a.parse().ok()))
+            .unwrap_or(10);
+
+        let style = if args.contains(&"--att") || args.contains(&"--gas") {
+            DisasmStyle::Gas
+        } else {
+            DisasmStyle::Intel
+        };
+
+        let insns = if let Some(addr_str) = args.first().filter(|a| !a.starts_with('-')) {
+            let addr = VirtAddr(parse_address(addr_str)?);
+            target.disassemble(addr, count, style)?
+        } else {
+            target.disassemble_at_pc(count, style)?
+        };
+
+        print!("{}", disasm::format_disassembly(&insns));
+        Ok(())
+    }
+
     fn cmd_help() -> anyhow::Result<()> {
         println!("{}", "rnicro - Linux x86_64 debugger".bold());
         println!();
@@ -263,6 +289,12 @@ mod linux {
         );
         println!("    memory read <addr> [n] hex dump");
         println!("    memory maps            show memory mappings");
+        println!(
+            "  {} (d)     disassemble instructions",
+            "disassemble".bold()
+        );
+        println!("    disassemble [addr] [N] disassemble N instructions");
+        println!("    disassemble --att     use AT&T syntax");
         println!("  {} (h)              this help", "help".bold());
         println!("  {} (q)              exit", "quit".bold());
         Ok(())

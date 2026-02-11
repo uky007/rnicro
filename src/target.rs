@@ -5,6 +5,7 @@
 //! unified interface used by the CLI.
 
 use crate::breakpoint::BreakpointManager;
+use crate::disasm::{self, DisasmInstruction, DisasmStyle};
 use crate::error::Result;
 use crate::process::Process;
 use crate::procfs::{self, MemoryRegion};
@@ -112,6 +113,33 @@ impl Target {
     /// Read the tracee's memory maps from `/proc/pid/maps`.
     pub fn memory_maps(&self) -> Result<Vec<MemoryRegion>> {
         procfs::read_memory_maps(self.process.pid())
+    }
+
+    /// Disassemble instructions at the given address.
+    ///
+    /// Reads `count` instructions from the tracee's memory starting at `addr`.
+    pub fn disassemble(
+        &self,
+        addr: VirtAddr,
+        count: usize,
+        style: DisasmStyle,
+    ) -> Result<Vec<DisasmInstruction>> {
+        // Read enough bytes for the requested instructions.
+        // x86_64 instructions are at most 15 bytes, so 15*count is an upper bound.
+        let read_len = count * 15;
+        let code = self.process.read_memory(addr, read_len)?;
+        Ok(disasm::disassemble(&code, addr, count, style))
+    }
+
+    /// Disassemble at the current instruction pointer.
+    pub fn disassemble_at_pc(
+        &self,
+        count: usize,
+        style: DisasmStyle,
+    ) -> Result<Vec<DisasmInstruction>> {
+        let regs = self.read_registers()?;
+        let pc = VirtAddr(regs.pc());
+        self.disassemble(pc, count, style)
     }
 
     /// Handle a stop event (e.g., adjust PC after breakpoint hit).
