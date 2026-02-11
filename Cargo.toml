@@ -1,0 +1,33 @@
+[package]
+name = "rnicro"
+version = "0.1.0"
+edition = "2021"
+description = "A Linux x86_64 debugger written in Rust"
+
+[dependencies]
+# Process control (ptrace, signals, fork/exec)
+nix = { version = "0.29", features = ["ptrace", "signal", "process"] }
+libc = "0.2"
+
+# ELF binary parsing
+goblin = "0.9"
+object = { version = "0.36", features = ["read"] }
+
+# DWARF debug info
+gimli = "0.31"
+addr2line = "0.24"
+
+# Disassembly
+iced-x86 = { version = "1.21", features = ["std", "decoder", "intel", "gas"] }
+
+# Memory-mapped I/O
+memmap2 = "0.9"
+
+# CLI / REPL
+rustyline = "14"
+clap = { version = "4", features = ["derive"] }
+colored = "2"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
