@@ -2,7 +2,7 @@
 name = "rnicro"
 version = "0.1.0"
 edition = "2021"
-description = "A Linux x86_64 debugger written in Rust"
+description = "A Linux x86_64 debugger and exploit development toolkit written in Rust"
 
 [dependencies]
 # Process control (ptrace, signals, fork/exec)

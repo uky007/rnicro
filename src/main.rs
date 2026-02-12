@@ -22,7 +22,7 @@ mod linux {
     use rnicro::types::{ProcessState, StopReason, VirtAddr};
 
     #[derive(Parser)]
-    #[command(name = "rnicro", about = "A Linux x86_64 debugger")]
+    #[command(name = "rnicro", about = "A Linux x86_64 debugger & exploit development toolkit")]
     struct Cli {
         /// Program to debug
         program: Option<PathBuf>,
@@ -1566,7 +1566,7 @@ mod linux {
     }
 
     fn cmd_help() -> anyhow::Result<()> {
-        println!("{}", "rnicro - Linux x86_64 debugger".bold());
+        println!("{}", "rnicro - Linux x86_64 debugger & exploit development toolkit".bold());
         println!();
         println!("  {} (c)          resume execution", "continue".bold());
         println!(
@@ -1754,6 +1754,16 @@ mod linux {
         );
         println!("  {} (h)              this help", "help".bold());
         println!("  {} (q)              exit", "quit".bold());
+        println!();
+        println!(
+            "{}",
+            "Library-only APIs (available via rnicro crate):".bold()
+        );
+        println!("  aslr           ASLR/PIE leak calculator, libc offset database");
+        println!("  rop_chain      automated ROP chain builder (execve, mprotect)");
+        println!("  one_gadget     one-gadget / magic gadget finder for libc");
+        println!("  heap_exploit   tcache poison, fastbin dup, House of Force");
+        println!("  tube           pwntools-style process I/O tubes");
         Ok(())
     }
 
