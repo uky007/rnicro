@@ -44,6 +44,11 @@ pub mod memscan;
 pub mod got_hook;
 pub mod shellcode;
 pub mod sigrop;
+pub mod aslr;
+pub mod heap_exploit;
+pub mod rop_chain;
+pub mod one_gadget;
+pub mod tube;
 
 // Linux-only modules (ptrace, user_regs_struct, etc.)
 #[cfg(target_os = "linux")]
