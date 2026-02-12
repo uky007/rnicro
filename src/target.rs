@@ -5,6 +5,7 @@
 //! stack unwinding, and source-level stepping into a unified interface
 //! used by the CLI.
 
+use crate::antidebug::{self, AntiDebugFinding, BypassConfig};
 use crate::breakpoint::BreakpointManager;
 use crate::checksec::{self, ChecksecResult};
 use crate::disasm::{self, DisasmInstruction, DisasmStyle};
@@ -77,6 +78,8 @@ pub struct Target {
     caught_syscalls: HashSet<u64>,
     /// Whether to catch all syscalls.
     catch_all_syscalls: bool,
+    /// Anti-debug bypass configuration.
+    bypass_config: BypassConfig,
 }
 
 impl Target {
@@ -100,6 +103,7 @@ impl Target {
             pending_signal: None,
             caught_syscalls: HashSet::new(),
             catch_all_syscalls: false,
+            bypass_config: BypassConfig::default(),
         })
     }
 
@@ -124,6 +128,7 @@ impl Target {
             pending_signal: None,
             caught_syscalls: HashSet::new(),
             catch_all_syscalls: false,
+            bypass_config: BypassConfig::default(),
         })
     }
 
@@ -488,6 +493,107 @@ impl Target {
     /// Patch the program binary on disk at a virtual address.
     pub fn patch_file(&self, vaddr: u64, patch_bytes: &[u8]) -> Result<PatchResult> {
         patch::patch_file(Path::new(&self.program_path), vaddr, patch_bytes)
+    }
+
+    // ── Anti-debug ────────────────────────────────────────────────
+
+    /// Scan the binary for anti-debug techniques.
+    pub fn antidebug_scan(&self) -> Result<Vec<AntiDebugFinding>> {
+        antidebug::scan(Path::new(&self.program_path))
+    }
+
+    /// Get the anti-debug bypass configuration.
+    pub fn bypass_config(&self) -> &BypassConfig {
+        &self.bypass_config
+    }
+
+    /// Set the anti-debug bypass configuration.
+    pub fn set_bypass_config(&mut self, config: BypassConfig) {
+        self.bypass_config = config;
+    }
+
+    // ── Heap analysis ─────────────────────────────────────────────
+
+    /// Read and parse heap chunks from the process.
+    ///
+    /// Finds the heap region from /proc/pid/maps and walks the chunk chain.
+    pub fn heap_chunks(&self, max_chunks: usize) -> Result<Vec<crate::heap::MallocChunk>> {
+        let maps = self.memory_maps()?;
+        let heap_region = maps
+            .iter()
+            .find(|m| m.pathname == "[heap]")
+            .ok_or_else(|| Error::Other("no [heap] region found in memory maps".into()))?;
+
+        let read_mem = |addr: u64, len: usize| -> Result<Vec<u8>> {
+            self.process.read_memory(VirtAddr(addr), len)
+        };
+
+        // Walk from heap start; use 0 as top (we'll stop on invalid size)
+        crate::heap::walk_chunks(heap_region.start.addr(), 0, &read_mem, max_chunks)
+    }
+
+    // ── Core dump ─────────────────────────────────────────────────
+
+    /// Generate an ELF core dump file from the current process state.
+    pub fn generate_coredump(&self) -> Result<Vec<u8>> {
+        let regs = self.read_registers()?;
+        let maps = self.memory_maps()?;
+
+        // Build register vector (user_regs_struct order)
+        let reg_names = [
+            "r15", "r14", "r13", "r12", "rbp", "rbx", "r11", "r10",
+            "r9", "r8", "rax", "rcx", "rdx", "rsi", "rdi", "orig_rax",
+            "rip", "cs", "eflags", "rsp", "ss", "fs_base", "gs_base",
+            "ds", "es", "fs", "gs",
+        ];
+        let mut reg_vals = Vec::new();
+        for name in &reg_names {
+            reg_vals.push(regs.get(name).unwrap_or(0));
+        }
+
+        // Read memory for each readable mapping
+        let mut mappings = Vec::new();
+        for region in &maps {
+            if !region.perms.read {
+                continue;
+            }
+            let size = (region.end.addr() - region.start.addr()) as usize;
+            // Skip very large mappings (>64MB) to keep dumps manageable
+            if size > 64 * 1024 * 1024 {
+                continue;
+            }
+            let data = match self.process.read_memory(region.start, size) {
+                Ok(d) => d,
+                Err(_) => continue, // Skip unreadable regions
+            };
+
+            let flags = {
+                let mut f = 0u32;
+                if region.perms.read { f |= crate::coredump::PF_R; }
+                if region.perms.write { f |= crate::coredump::PF_W; }
+                if region.perms.execute { f |= crate::coredump::PF_X; }
+                f
+            };
+
+            mappings.push(crate::coredump::CoreMapping {
+                start: region.start.addr(),
+                end: region.end.addr(),
+                flags,
+                data,
+                pathname: region.pathname.clone(),
+                file_offset: 0,
+            });
+        }
+
+        let info = crate::coredump::CoreDumpInfo {
+            registers: reg_vals,
+            signal: 0,
+            pid: self.process.pid().as_raw() as u32,
+            mappings,
+            auxv: Vec::new(), // TODO: read /proc/pid/auxv
+        };
+
+        crate::coredump::generate(&info)
     }
 
     // ── Shared libraries ─────────────────────────────────────────

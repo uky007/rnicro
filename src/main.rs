@@ -140,6 +140,10 @@ mod linux {
             "pattern" | "pat" => cmd_pattern(args),
             "patch" => cmd_patch(target, args),
             "patch-file" => cmd_patch_file(target, args),
+            "antidebug" | "antid" => cmd_antidebug(target, args),
+            "heap" => cmd_heap(target, args),
+            "coredump" | "core" => cmd_coredump(target, args),
+            "strace" => cmd_strace(target, args),
             "list" | "l" => cmd_list(target),
             "help" | "h" => cmd_help(),
             "quit" | "q" => std::process::exit(0),
@@ -1140,6 +1144,134 @@ mod linux {
         Ok(())
     }
 
+    fn cmd_antidebug(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        match args.first().copied() {
+            Some("scan") | Some("s") | None => {
+                let findings = target.antidebug_scan()?;
+                if findings.is_empty() {
+                    println!("  {}", "no anti-debug techniques detected".green());
+                } else {
+                    println!(
+                        "  {} anti-debug technique(s) detected:",
+                        findings.len().to_string().yellow()
+                    );
+                    for f in &findings {
+                        let addr_str = if f.addr != 0 {
+                            format!("0x{:x}", f.addr)
+                        } else {
+                            "-".to_string()
+                        };
+                        println!(
+                            "  {:>16}  {:>20}  {}",
+                            addr_str.cyan(),
+                            format!("{}", f.technique).yellow(),
+                            f.description
+                        );
+                    }
+                }
+            }
+            Some("bypass") => {
+                match args.get(1).copied() {
+                    Some("enable") | Some("on") => {
+                        let mut cfg = target.bypass_config().clone();
+                        cfg.bypass_ptrace = true;
+                        cfg.skip_int3_traps = true;
+                        target.set_bypass_config(cfg);
+                        println!("  anti-debug bypass: {}", "enabled".green());
+                    }
+                    Some("disable") | Some("off") => {
+                        target.set_bypass_config(rnicro::antidebug::BypassConfig::default());
+                        println!("  anti-debug bypass: {}", "disabled".yellow());
+                    }
+                    Some("status") | None => {
+                        let cfg = target.bypass_config();
+                        println!("  bypass_ptrace:    {}", if cfg.bypass_ptrace { "on".green().to_string() } else { "off".to_string() });
+                        println!("  skip_int3_traps:  {}", if cfg.skip_int3_traps { "on".green().to_string() } else { "off".to_string() });
+                    }
+                    Some(sub) => println!("unknown bypass subcommand: {} (use enable|disable|status)", sub),
+                }
+            }
+            Some(sub) => println!("unknown antidebug subcommand: {} (use scan|bypass)", sub),
+        }
+        Ok(())
+    }
+
+    fn cmd_heap(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        let max_chunks: usize = args
+            .iter()
+            .position(|&a| a == "--max" || a == "-n")
+            .and_then(|i| args.get(i + 1).and_then(|s| s.parse().ok()))
+            .unwrap_or(100);
+
+        match args.first().copied() {
+            Some("chunks") | Some("c") | None => {
+                let chunks = target.heap_chunks(max_chunks)?;
+                if chunks.is_empty() {
+                    println!("  {}", "no heap chunks found".yellow());
+                    return Ok(());
+                }
+                println!(
+                    "  {:>18}  {:>10}  {:>10}  {}",
+                    "address".bold(),
+                    "size".bold(),
+                    "raw size".bold(),
+                    "flags".bold()
+                );
+                for chunk in &chunks {
+                    let mut flags = Vec::new();
+                    if chunk.prev_inuse { flags.push("P"); }
+                    if chunk.is_mmapped { flags.push("M"); }
+                    if chunk.non_main_arena { flags.push("N"); }
+                    let flag_str = if flags.is_empty() {
+                        "-".to_string()
+                    } else {
+                        flags.join("|")
+                    };
+                    println!(
+                        "  0x{:016x}  {:>10}  0x{:08x}  {}",
+                        chunk.addr,
+                        chunk.size,
+                        chunk.size_raw,
+                        flag_str.cyan()
+                    );
+                }
+                println!("  {} chunk(s) total", chunks.len());
+            }
+            Some(sub) => println!("unknown heap subcommand: {} (use chunks)", sub),
+        }
+        Ok(())
+    }
+
+    fn cmd_coredump(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        let filename = args.first().copied().unwrap_or("core.dump");
+        println!("  generating core dump...");
+        let data = target.generate_coredump()?;
+        std::fs::write(filename, &data)
+            .map_err(|e| anyhow::anyhow!("write core dump: {}", e))?;
+        println!(
+            "  core dump written to {} ({} bytes)",
+            filename.bold(),
+            data.len()
+        );
+        Ok(())
+    }
+
+    fn cmd_strace(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        match args.first().copied() {
+            Some("on") | Some("enable") | None => {
+                target.set_catch_all_syscalls(true);
+                println!("  syscall tracing: {} (use 'continue' to run)", "enabled".green());
+                println!("  tip: use 'strace off' to disable, 'catchpoint syscall list' to see status");
+            }
+            Some("off") | Some("disable") => {
+                target.set_catch_all_syscalls(false);
+                println!("  syscall tracing: {}", "disabled".yellow());
+            }
+            Some(sub) => println!("unknown strace subcommand: {} (use on|off)", sub),
+        }
+        Ok(())
+    }
+
     fn cmd_help() -> anyhow::Result<()> {
         println!("{}", "rnicro - Linux x86_64 debugger".bold());
         println!();
@@ -1266,6 +1398,29 @@ mod linux {
             "patch-file".bold()
         );
         println!(
+            "  {}         scan for anti-debug techniques",
+            "antidebug".bold()
+        );
+        println!("    antidebug scan             detect anti-debug patterns");
+        println!("    antidebug bypass enable     enable bypass hooks");
+        println!("    antidebug bypass disable    disable bypass hooks");
+        println!(
+            "  {}               inspect glibc heap chunks",
+            "heap".bold()
+        );
+        println!("    heap chunks [--max N]       walk malloc_chunk chain");
+        println!(
+            "  {}           generate ELF core dump",
+            "coredump".bold()
+        );
+        println!("    coredump [filename]         dump to file (default: core.dump)");
+        println!(
+            "  {}             enhanced syscall tracing",
+            "strace".bold()
+        );
+        println!("    strace on                   enable strace-like output");
+        println!("    strace off                  disable tracing");
+        println!(
             "  {} (l)              show source at current PC",
             "list".bold()
         );
@@ -1287,28 +1442,33 @@ mod linux {
                 println!("  received signal: {:?}", sig);
             }
             StopReason::SyscallEntry { number, args } => {
-                let name = rnicro::syscall::name(*number)
-                    .unwrap_or("unknown");
+                // Use enhanced formatting from syscall_trace
+                let no_read = |_addr: u64| -> rnicro::error::Result<String> {
+                    Err(rnicro::error::Error::Other("no read".into()))
+                };
+                let formatted = rnicro::syscall_trace::format_syscall_entry(
+                    *number, args, &no_read,
+                );
                 println!(
-                    "  {} {}({}) [{}]",
-                    "syscall entry:".yellow(),
-                    name.bold(),
-                    format_syscall_args(args),
-                    number,
+                    "  {} {}",
+                    "syscall:".yellow(),
+                    formatted,
                 );
             }
             StopReason::SyscallExit { number, retval } => {
                 let name = rnicro::syscall::name(*number)
                     .unwrap_or("unknown");
+                let ret_str = rnicro::syscall_trace::format_syscall_return(*number, *retval);
+                let colored_ret = if *retval < 0 {
+                    ret_str.red().to_string()
+                } else {
+                    ret_str
+                };
                 println!(
                     "  {} {}() = {}",
                     "syscall exit:".yellow(),
                     name.bold(),
-                    if *retval < 0 {
-                        format!("{} ({})", retval, retval).red().to_string()
-                    } else {
-                        format!("{}", retval)
-                    },
+                    colored_ret,
                 );
             }
             StopReason::WatchpointHit { slot, addr } => {
@@ -1329,13 +1489,6 @@ mod linux {
                 println!("  new thread created: {}", pid);
             }
         }
-    }
-
-    fn format_syscall_args(args: &[u64; 6]) -> String {
-        args.iter()
-            .map(|a| format!("0x{:x}", a))
-            .collect::<Vec<_>>()
-            .join(", ")
     }
 
     /// Print thread info when there are multiple threads.
