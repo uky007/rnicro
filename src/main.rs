@@ -135,6 +135,11 @@ mod linux {
             "checksec" => cmd_checksec(target),
             "got" | "plt" => cmd_got(target, args),
             "strings" | "str" => cmd_strings(target, args),
+            "gadgets" | "rop" => cmd_gadgets(target, args),
+            "entropy" => cmd_entropy(target),
+            "pattern" | "pat" => cmd_pattern(args),
+            "patch" => cmd_patch(target, args),
+            "patch-file" => cmd_patch_file(target, args),
             "list" | "l" => cmd_list(target),
             "help" | "h" => cmd_help(),
             "quit" | "q" => std::process::exit(0),
@@ -231,12 +236,29 @@ mod linux {
         match args.first().copied() {
             Some("set") | Some("s") => {
                 if args.len() < 2 {
-                    println!("usage: breakpoint set <address|symbol>");
+                    println!("usage: breakpoint set <address|symbol> [if <condition>]");
                     return Ok(());
                 }
                 let addr = resolve_address(target, args[1])?;
-                let id = target.set_breakpoint(addr)?;
-                println!("  breakpoint #{} set at {}", id, addr);
+
+                // Check for "if <condition>" syntax
+                let condition = if args.len() >= 4 && args[2] == "if" {
+                    Some(args[3..].join(" "))
+                } else {
+                    None
+                };
+
+                let id = if let Some(cond) = &condition {
+                    target.set_conditional_breakpoint(addr, cond.clone())?
+                } else {
+                    target.set_breakpoint(addr)?
+                };
+
+                if let Some(cond) = &condition {
+                    println!("  breakpoint #{} set at {} if {}", id, addr, cond);
+                } else {
+                    println!("  breakpoint #{} set at {}", id, addr);
+                }
             }
             Some("delete") | Some("d") => {
                 if args.len() < 2 {
@@ -252,8 +274,12 @@ mod linux {
                 if bps.is_empty() {
                     println!("  no breakpoints set");
                 } else {
-                    for (i, addr) in bps.iter().enumerate() {
-                        println!("  #{}: {}", i + 1, addr);
+                    for (i, (addr, cond)) in bps.iter().enumerate() {
+                        if let Some(cond) = cond {
+                            println!("  #{}: {} if {}", i + 1, addr, cond);
+                        } else {
+                            println!("  #{}: {}", i + 1, addr);
+                        }
                     }
                 }
             }
@@ -920,6 +946,200 @@ mod linux {
         Ok(())
     }
 
+    fn cmd_gadgets(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        let max_depth: usize = args
+            .iter()
+            .find(|a| a.starts_with("--depth"))
+            .and_then(|_| args.iter().find_map(|a| a.parse().ok()))
+            .unwrap_or(5);
+
+        let filter: Option<&str> = args.iter()
+            .position(|&a| a == "--filter" || a == "-f")
+            .and_then(|i| args.get(i + 1).copied());
+
+        let max_results: usize = args
+            .iter()
+            .position(|&a| a == "--max" || a == "-n")
+            .and_then(|i| args.get(i + 1).and_then(|s| s.parse().ok()))
+            .unwrap_or(100);
+
+        let gadgets = target.find_gadgets(max_depth)?;
+
+        let display_gadgets: Vec<_> = if let Some(pat) = filter {
+            rnicro::rop::filter_gadgets(&gadgets, pat)
+                .into_iter()
+                .cloned()
+                .collect()
+        } else {
+            gadgets
+        };
+
+        let total = display_gadgets.len();
+        if total == 0 {
+            println!("  {}", "no gadgets found".yellow());
+            return Ok(());
+        }
+
+        println!(
+            "  {} gadget(s) found (depth: {}, showing up to {}):",
+            total, max_depth, max_results
+        );
+        for g in display_gadgets.iter().take(max_results) {
+            println!(
+                "  {:016x}  {}",
+                g.addr,
+                g.instructions.cyan()
+            );
+        }
+        if total > max_results {
+            println!(
+                "  ... and {} more (use --max N or --filter <pattern>)",
+                total - max_results
+            );
+        }
+        Ok(())
+    }
+
+    fn cmd_entropy(target: &mut Target) -> anyhow::Result<()> {
+        let sections = target.section_entropy()?;
+        if sections.is_empty() {
+            println!("  {}", "no sections found".yellow());
+            return Ok(());
+        }
+
+        println!(
+            "  {:>20}  {:>12}  {:>8}  {}",
+            "section".bold(),
+            "size".bold(),
+            "entropy".bold(),
+            "classification".bold()
+        );
+        for s in &sections {
+            let class = rnicro::entropy::classify_entropy(s.entropy);
+            let entropy_str = format!("{:.4}", s.entropy);
+            let colored_entropy = if s.entropy > 7.0 {
+                entropy_str.red().to_string()
+            } else if s.entropy > 5.5 {
+                entropy_str.to_string()
+            } else if s.entropy < 0.5 {
+                entropy_str.dimmed().to_string()
+            } else {
+                entropy_str.cyan().to_string()
+            };
+            println!(
+                "  {:>20}  {:>12}  {:>8}  {}",
+                s.name.bold(),
+                s.size,
+                colored_entropy,
+                class.dimmed()
+            );
+        }
+        Ok(())
+    }
+
+    fn cmd_pattern(args: &[&str]) -> anyhow::Result<()> {
+        match args.first().copied() {
+            Some("create") | Some("c") => {
+                if args.len() < 2 {
+                    println!("usage: pattern create <length>");
+                    return Ok(());
+                }
+                let length: usize = args[1]
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("invalid length: {}", args[1]))?;
+                let pattern = rnicro::pattern::create(length)?;
+                println!("{}", pattern);
+            }
+            Some("offset") | Some("o") => {
+                if args.len() < 2 {
+                    println!("usage: pattern offset <hex-value>");
+                    println!("  e.g.: pattern offset 0x41306141");
+                    return Ok(());
+                }
+                let val_str = args[1].strip_prefix("0x").unwrap_or(args[1]);
+                let value = u32::from_str_radix(val_str, 16)
+                    .map_err(|_| anyhow::anyhow!("invalid hex value: {}", args[1]))?;
+                match rnicro::pattern::offset_of(value)? {
+                    Some(offset) => {
+                        println!(
+                            "  pattern offset: {} (0x{:x})",
+                            offset.to_string().bold(),
+                            offset
+                        );
+                    }
+                    None => {
+                        println!("  {}", "pattern not found".yellow());
+                    }
+                }
+            }
+            None => {
+                println!("usage: pattern create <length>");
+                println!("       pattern offset <hex-value>");
+            }
+            Some(sub) => {
+                println!("unknown pattern subcommand: {}", sub);
+            }
+        }
+        Ok(())
+    }
+
+    fn cmd_patch(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        if args.len() < 2 {
+            println!("usage: patch <address> <hex_bytes>");
+            println!("  Patches process memory (live). Use 'patch-file' for on-disk patching.");
+            return Ok(());
+        }
+        let addr = VirtAddr(parse_address(args[0])?);
+        let hex_str: String = args[1..].join("");
+        let bytes = parse_hex_bytes(&hex_str)?;
+
+        // Read original bytes first (for display)
+        let original = target.read_memory(addr, bytes.len())?;
+        target.write_memory(addr, &bytes)?;
+
+        println!(
+            "  patched {} byte(s) at {}",
+            bytes.len(),
+            format!("0x{:x}", addr.addr()).cyan()
+        );
+        print!("  original: ");
+        for b in &original {
+            print!("{:02x} ", b);
+        }
+        println!();
+        print!("  patched:  ");
+        for b in &bytes {
+            print!("{:02x} ", b);
+        }
+        println!();
+        Ok(())
+    }
+
+    fn cmd_patch_file(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        if args.len() < 2 {
+            println!("usage: patch-file <vaddr> <hex_bytes>");
+            println!("  Patches the binary on disk at the given virtual address.");
+            return Ok(());
+        }
+        let vaddr = parse_address(args[0])?;
+        let hex_str: String = args[1..].join("");
+        let bytes = parse_hex_bytes(&hex_str)?;
+
+        let result = target.patch_file(vaddr, &bytes)?;
+        println!(
+            "  patched {} byte(s) at vaddr {} (file offset 0x{:x})",
+            bytes.len(),
+            format!("0x{:x}", result.vaddr).cyan(),
+            result.file_offset
+        );
+        print!("  original: ");
+        for b in &result.original_bytes {
+            print!("{:02x} ", b);
+        }
+        println!();
+        Ok(())
+    }
+
     fn cmd_help() -> anyhow::Result<()> {
         println!("{}", "rnicro - Linux x86_64 debugger".bold());
         println!();
@@ -950,10 +1170,10 @@ mod linux {
             "  {} (b)       manage breakpoints",
             "breakpoint".bold()
         );
-        println!("    breakpoint set <addr>  set a breakpoint");
-        println!("    breakpoint set <sym>   set at symbol");
-        println!("    breakpoint delete <a>  remove a breakpoint");
-        println!("    breakpoint list        list all breakpoints");
+        println!("    breakpoint set <addr>   set a breakpoint");
+        println!("    breakpoint set <a> if E conditional breakpoint");
+        println!("    breakpoint delete <a>   remove a breakpoint");
+        println!("    breakpoint list         list all breakpoints");
         println!(
             "  {} (x)            read/write memory / maps",
             "memory".bold()
@@ -1024,6 +1244,26 @@ mod linux {
         println!(
             "  {} (str)         extract strings [min_len] [max_count]",
             "strings".bold()
+        );
+        println!(
+            "  {} (rop)        search ROP gadgets [--depth N] [--filter S]",
+            "gadgets".bold()
+        );
+        println!(
+            "  {}            per-section Shannon entropy analysis",
+            "entropy".bold()
+        );
+        println!(
+            "  {} (pat)          cyclic pattern create|offset",
+            "pattern".bold()
+        );
+        println!(
+            "  {}              live memory patch: patch <addr> <hex>",
+            "patch".bold()
+        );
+        println!(
+            "  {}         on-disk patch: patch-file <vaddr> <hex>",
+            "patch-file".bold()
         );
         println!(
             "  {} (l)              show source at current PC",

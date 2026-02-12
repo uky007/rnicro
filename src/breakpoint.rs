@@ -18,6 +18,8 @@ pub struct BreakpointSite {
     addr: VirtAddr,
     saved_byte: u8,
     enabled: bool,
+    /// Optional condition expression (breakpoint only stops if expression evaluates to non-zero).
+    condition: Option<String>,
 }
 
 impl BreakpointSite {
@@ -57,6 +59,16 @@ impl BreakpointSite {
     pub fn saved_byte(&self) -> u8 {
         self.saved_byte
     }
+
+    /// Get the condition expression, if any.
+    pub fn condition(&self) -> Option<&str> {
+        self.condition.as_deref()
+    }
+
+    /// Set or clear the condition expression.
+    pub fn set_condition(&mut self, cond: Option<String>) {
+        self.condition = cond;
+    }
 }
 
 /// Manages all breakpoint sites for a process.
@@ -75,6 +87,16 @@ impl BreakpointManager {
 
     /// Set a breakpoint at the given address.
     pub fn set(&mut self, proc: &Process, addr: VirtAddr) -> Result<u32> {
+        self.set_with_condition(proc, addr, None)
+    }
+
+    /// Set a breakpoint with an optional condition expression.
+    pub fn set_with_condition(
+        &mut self,
+        proc: &Process,
+        addr: VirtAddr,
+        condition: Option<String>,
+    ) -> Result<u32> {
         if self.sites.contains_key(&addr.addr()) {
             return Err(Error::Breakpoint(format!(
                 "breakpoint already set at {}",
@@ -85,6 +107,7 @@ impl BreakpointManager {
             addr,
             saved_byte: 0,
             enabled: false,
+            condition,
         };
         site.enable(proc)?;
         let id = self.next_id;
@@ -166,10 +189,25 @@ mod tests {
             addr: VirtAddr(0x401000),
             saved_byte: 0,
             enabled: false,
+            condition: None,
         };
         assert_eq!(site.addr(), VirtAddr(0x401000));
         assert!(!site.is_enabled());
         assert_eq!(site.saved_byte(), 0);
+        assert!(site.condition().is_none());
+    }
+
+    #[test]
+    fn breakpoint_site_with_condition() {
+        let mut site = BreakpointSite {
+            addr: VirtAddr(0x401000),
+            saved_byte: 0,
+            enabled: false,
+            condition: Some("x > 5".to_string()),
+        };
+        assert_eq!(site.condition(), Some("x > 5"));
+        site.set_condition(None);
+        assert!(site.condition().is_none());
     }
 
     #[test]

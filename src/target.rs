@@ -10,10 +10,13 @@ use crate::checksec::{self, ChecksecResult};
 use crate::disasm::{self, DisasmInstruction, DisasmStyle};
 use crate::dwarf::{DwarfInfo, SourceLocation};
 use crate::elf::{self, ElfFile, GotPltEntry};
+use crate::entropy::{self, SectionEntropy};
 use crate::error::{Error, Result};
+use crate::patch::{self, PatchResult};
 use crate::process::Process;
 use crate::procfs::{self, MemoryRegion};
 use crate::registers::{self, Registers};
+use crate::rop::{self, Gadget};
 use crate::strings::{self, ExtractedString};
 use crate::types::{ProcessState, StopReason, VirtAddr};
 use crate::unwind::Unwinder;
@@ -130,6 +133,7 @@ impl Target {
     ///
     /// Delivers a pending signal if one was stored by the signal policy.
     /// Uses PTRACE_SYSCALL instead of PTRACE_CONT when syscall catching is active.
+    /// Auto-continues past conditional breakpoints whose condition is false.
     pub fn resume(&mut self) -> Result<StopReason> {
         loop {
             let sig = self.pending_signal.take();
@@ -152,6 +156,19 @@ impl Target {
                     }
                 }
                 _ => {}
+            }
+
+            // Auto-continue for conditional breakpoints where condition is false
+            if let StopReason::BreakpointHit { addr } = &reason {
+                if let Some(site) = self.breakpoints.get_at(*addr) {
+                    if let Some(cond) = site.condition() {
+                        if !self.evaluate_condition(cond) {
+                            // Condition is false — step over the breakpoint and continue
+                            self.breakpoints.step_over_breakpoint(&mut self.process, *addr)?;
+                            continue;
+                        }
+                    }
+                }
             }
 
             return Ok(reason);
@@ -339,14 +356,30 @@ impl Target {
         self.breakpoints.set(&self.process, addr)
     }
 
+    /// Set a conditional breakpoint at an address.
+    ///
+    /// The breakpoint only stops execution when `condition` evaluates
+    /// to a non-zero value (using the expression evaluator).
+    pub fn set_conditional_breakpoint(
+        &mut self,
+        addr: VirtAddr,
+        condition: String,
+    ) -> Result<u32> {
+        self.breakpoints
+            .set_with_condition(&self.process, addr, Some(condition))
+    }
+
     /// Remove a breakpoint at an address.
     pub fn remove_breakpoint(&mut self, addr: VirtAddr) -> Result<()> {
         self.breakpoints.remove(&self.process, addr)
     }
 
-    /// List all breakpoints.
-    pub fn list_breakpoints(&self) -> Vec<VirtAddr> {
-        self.breakpoints.list().map(|s| s.addr()).collect()
+    /// List all breakpoints with their conditions.
+    pub fn list_breakpoints(&self) -> Vec<(VirtAddr, Option<&str>)> {
+        self.breakpoints
+            .list()
+            .map(|s| (s.addr(), s.condition()))
+            .collect()
     }
 
     // ── Watchpoints ─────────────────────────────────────────────────
@@ -434,6 +467,27 @@ impl Target {
     /// Extract printable strings from the program binary.
     pub fn extract_strings(&self, min_length: usize) -> Result<Vec<ExtractedString>> {
         strings::extract_strings(Path::new(&self.program_path), min_length)
+    }
+
+    // ── ROP gadget search ─────────────────────────────────────────
+
+    /// Search for ROP gadgets in the program binary.
+    pub fn find_gadgets(&self, max_depth: usize) -> Result<Vec<Gadget>> {
+        rop::find_gadgets(Path::new(&self.program_path), max_depth)
+    }
+
+    // ── Entropy analysis ──────────────────────────────────────────
+
+    /// Analyze per-section entropy of the program binary.
+    pub fn section_entropy(&self) -> Result<Vec<SectionEntropy>> {
+        entropy::analyze_sections(Path::new(&self.program_path))
+    }
+
+    // ── Binary patching ───────────────────────────────────────────
+
+    /// Patch the program binary on disk at a virtual address.
+    pub fn patch_file(&self, vaddr: u64, patch_bytes: &[u8]) -> Result<PatchResult> {
+        patch::patch_file(Path::new(&self.program_path), vaddr, patch_bytes)
     }
 
     // ── Shared libraries ─────────────────────────────────────────
@@ -667,6 +721,42 @@ impl Target {
     /// Get the set of caught syscall numbers.
     pub fn caught_syscalls(&self) -> &HashSet<u64> {
         &self.caught_syscalls
+    }
+
+    /// Evaluate a condition expression for conditional breakpoints.
+    ///
+    /// Tries to parse and evaluate the expression. If the expression
+    /// resolves to a variable, reads it from the tracee. For simple
+    /// register-based conditions (e.g., "rax"), reads the register value.
+    /// Returns `true` if the expression evaluates to non-zero.
+    fn evaluate_condition(&self, cond: &str) -> bool {
+        // Try parsing as an expression
+        let expr = match crate::expr_eval::parse(cond) {
+            Ok(e) => e,
+            Err(_) => return true, // Parse failure → stop (safe default)
+        };
+
+        // Simple evaluation: handle integer literals and variable names
+        match &expr {
+            crate::expr_eval::Expr::IntLit(val) => *val != 0,
+            crate::expr_eval::Expr::Variable(name) => {
+                // Try reading as a register first
+                if let Ok(regs) = self.read_registers() {
+                    if let Ok(val) = regs.get(name) {
+                        return val != 0;
+                    }
+                }
+                // Try reading as a variable
+                match self.read_variable(name) {
+                    Ok(Some((_, formatted))) => {
+                        // Parse the formatted value — non-zero means true
+                        formatted.trim() != "0" && formatted.trim() != "false"
+                    }
+                    _ => true, // Can't evaluate → stop (safe default)
+                }
+            }
+            _ => true, // Complex expressions → stop for now (safe default)
+        }
     }
 
     /// Build a DWARF register snapshot from the current register values.

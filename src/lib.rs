@@ -30,6 +30,10 @@ pub mod unwind;
 pub mod syscall;
 pub mod checksec;
 pub mod strings;
+pub mod rop;
+pub mod entropy;
+pub mod pattern;
+pub mod patch;
 
 // Linux-only modules (ptrace, user_regs_struct, etc.)
 #[cfg(target_os = "linux")]
