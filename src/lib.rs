@@ -23,6 +23,7 @@ pub mod procfs;
 pub mod disasm;
 pub mod elf;
 pub mod dwarf;
+pub mod dwarf_expr;
 pub mod unwind;
 pub mod syscall;
 
