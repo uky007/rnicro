@@ -108,6 +108,8 @@ mod linux {
             "watchpoint" | "watch" | "wp" => cmd_watchpoint(target, args),
             "catchpoint" | "catch" => cmd_catchpoint(target, args),
             "signal" | "sig" => cmd_signal(target, args),
+            "threads" | "thr" => cmd_threads(target),
+            "thread" | "t" => cmd_thread(target, args),
             "libs" | "sharedlib" => cmd_libs(target),
             "list" | "l" => cmd_list(target),
             "help" | "h" => cmd_help(),
@@ -125,6 +127,7 @@ mod linux {
     fn cmd_continue(target: &mut Target) -> anyhow::Result<()> {
         let reason = target.resume()?;
         print_stop_reason(&reason);
+        print_thread_info(target);
         print_location(target);
         Ok(())
     }
@@ -549,6 +552,35 @@ mod linux {
         Ok(())
     }
 
+    fn cmd_threads(target: &mut Target) -> anyhow::Result<()> {
+        let threads = target.thread_list();
+        let current = target.current_tid();
+        println!("  {} thread(s):", threads.len());
+        for &tid in threads {
+            let marker = if tid == current { "*" } else { " " };
+            let label = if tid == target.pid() {
+                " (main)".dimmed().to_string()
+            } else {
+                String::new()
+            };
+            println!("  {} tid {}{}", marker.green().bold(), tid, label);
+        }
+        Ok(())
+    }
+
+    fn cmd_thread(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        if args.is_empty() {
+            println!("  current thread: tid {}", target.current_tid());
+            return Ok(());
+        }
+        let tid: i32 = args[0]
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid tid: {}", args[0]))?;
+        target.switch_thread(nix::unistd::Pid::from_raw(tid))?;
+        println!("  switched to thread tid {}", tid);
+        Ok(())
+    }
+
     fn cmd_libs(target: &mut Target) -> anyhow::Result<()> {
         match target.shared_libraries() {
             Ok(libs) => {
@@ -684,6 +716,14 @@ mod linux {
         println!("    signal handle <sig> <act>  set policy (stop|nostop|pass|nopass)");
         println!("    signal list                show all signal policies");
         println!(
+            "  {} (thr)          list all threads",
+            "threads".bold()
+        );
+        println!(
+            "  {} (t)            switch to thread by tid",
+            "thread".bold()
+        );
+        println!(
             "  {} (libs)           list loaded shared libraries",
             "sharedlib".bold()
         );
@@ -758,6 +798,18 @@ mod linux {
             .map(|a| format!("0x{:x}", a))
             .collect::<Vec<_>>()
             .join(", ")
+    }
+
+    /// Print thread info when there are multiple threads.
+    fn print_thread_info(target: &Target) {
+        let threads = target.thread_list();
+        if threads.len() > 1 {
+            println!(
+                "  [thread {} of {}]",
+                target.current_tid(),
+                threads.len()
+            );
+        }
     }
 
     /// Print source location and function name (if available).

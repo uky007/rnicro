@@ -366,14 +366,14 @@ impl Target {
 
     // ── Registers ──────────────────────────────────────────────────
 
-    /// Read all registers.
+    /// Read all registers (from the current thread).
     pub fn read_registers(&self) -> Result<Registers> {
-        Registers::read(self.process.pid())
+        Registers::read(self.process.current_tid())
     }
 
-    /// Write registers back to the tracee.
+    /// Write registers back to the current thread.
     pub fn write_registers(&self, regs: &Registers) -> Result<()> {
-        regs.write(self.process.pid())
+        regs.write(self.process.current_tid())
     }
 
     // ── Memory ─────────────────────────────────────────────────────
@@ -453,6 +453,23 @@ impl Target {
     /// Check whether DWARF debug info is available.
     pub fn has_debug_info(&self) -> bool {
         self.dwarf.is_some()
+    }
+
+    // ── Threads ─────────────────────────────────────────────────────
+
+    /// Get all known thread TIDs.
+    pub fn thread_list(&self) -> &[nix::unistd::Pid] {
+        self.process.thread_list()
+    }
+
+    /// Get the current thread TID.
+    pub fn current_tid(&self) -> nix::unistd::Pid {
+        self.process.current_tid()
+    }
+
+    /// Switch to a different thread.
+    pub fn switch_thread(&mut self, tid: nix::unistd::Pid) -> Result<()> {
+        self.process.set_current_tid(tid)
     }
 
     // ── Accessors ──────────────────────────────────────────────────

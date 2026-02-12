@@ -9,7 +9,7 @@
 
 use nix::sys::ptrace;
 use nix::sys::signal::Signal;
-use nix::sys::wait::{waitpid, WaitStatus};
+use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{fork, execvp, ForkResult, Pid};
 use std::ffi::CString;
 use std::path::Path;
@@ -79,8 +79,16 @@ pub fn write_debug_reg(pid: Pid, reg: usize, value: u64) -> Result<()> {
 }
 
 /// A debugged process controlled via ptrace.
+///
+/// Supports multi-threaded tracees: tracks all threads created via clone,
+/// and waits for events from any thread.
 pub struct Process {
+    /// Thread-group leader PID.
     pid: Pid,
+    /// All known thread TIDs (includes the leader).
+    threads: Vec<Pid>,
+    /// The thread we're currently operating on (last stopped or user-selected).
+    current_tid: Pid,
     state: ProcessState,
     terminate_on_end: bool,
     is_attached: bool,
@@ -154,6 +162,8 @@ impl Process {
 
                 Ok(Process {
                     pid: child,
+                    threads: vec![child],
+                    current_tid: child,
                     state: ProcessState::Stopped,
                     terminate_on_end: true,
                     is_attached: true,
@@ -185,8 +195,34 @@ impl Process {
                 | ptrace::Options::PTRACE_O_TRACESYSGOOD,
         )?;
 
+        // Discover existing threads via /proc/pid/task
+        let mut threads = vec![pid];
+        if let Ok(entries) = std::fs::read_dir(format!("/proc/{}/task", pid)) {
+            for entry in entries.flatten() {
+                if let Ok(tid_str) = entry.file_name().into_string() {
+                    if let Ok(tid) = tid_str.parse::<i32>() {
+                        let tid = Pid::from_raw(tid);
+                        if tid != pid && !threads.contains(&tid) {
+                            // Attach to each existing thread
+                            if ptrace::attach(tid).is_ok() {
+                                let _ = waitpid(tid, None);
+                                let _ = ptrace::setoptions(
+                                    tid,
+                                    ptrace::Options::PTRACE_O_TRACECLONE
+                                        | ptrace::Options::PTRACE_O_TRACESYSGOOD,
+                                );
+                                threads.push(tid);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(Process {
             pid,
+            threads,
+            current_tid: pid,
             state: ProcessState::Stopped,
             terminate_on_end: false,
             is_attached: true,
@@ -194,68 +230,113 @@ impl Process {
         })
     }
 
-    /// Resume execution of the tracee.
+    /// Resume execution of the current thread.
     pub fn resume(&mut self) -> Result<()> {
-        ptrace::cont(self.pid, None)?;
+        ptrace::cont(self.current_tid, None)?;
         self.state = ProcessState::Running;
         Ok(())
     }
 
-    /// Resume execution, delivering a signal to the tracee.
+    /// Resume execution, delivering a signal to the current thread.
     pub fn resume_with_signal(&mut self, sig: Signal) -> Result<()> {
-        ptrace::cont(self.pid, Some(sig))?;
+        ptrace::cont(self.current_tid, Some(sig))?;
         self.state = ProcessState::Running;
         Ok(())
     }
 
     /// Resume execution, stopping at the next syscall entry/exit.
     pub fn resume_with_syscall_trap(&mut self, sig: Option<Signal>) -> Result<()> {
-        ptrace::syscall(self.pid, sig)?;
+        ptrace::syscall(self.current_tid, sig)?;
         self.state = ProcessState::Running;
         Ok(())
     }
 
-    /// Execute a single instruction.
+    /// Execute a single instruction on the current thread.
     pub fn step_instruction(&mut self) -> Result<()> {
-        ptrace::step(self.pid, None)?;
+        ptrace::step(self.current_tid, None)?;
         self.state = ProcessState::Running;
         Ok(())
     }
 
-    /// Wait for the tracee to stop and classify the reason.
+    /// Wait for any thread to stop and classify the reason.
+    ///
+    /// Uses `waitpid(-1, __WALL)` to catch events from any thread.
+    /// Updates `current_tid` to the thread that stopped.
     pub fn wait_on_signal(&mut self) -> Result<StopReason> {
-        let status = waitpid(self.pid, None)
-            .map_err(|e| Error::Process(format!("waitpid: {}", e)))?;
+        let status = waitpid(
+            Pid::from_raw(-1),
+            Some(WaitPidFlag::__WALL),
+        )
+        .map_err(|e| Error::Process(format!("waitpid: {}", e)))?;
+
+        // Extract which TID reported this event
+        let stopped_tid = match &status {
+            WaitStatus::Stopped(pid, _)
+            | WaitStatus::PtraceSyscall(pid)
+            | WaitStatus::PtraceEvent(pid, _, _)
+            | WaitStatus::Exited(pid, _)
+            | WaitStatus::Signaled(pid, _, _) => *pid,
+            _ => self.current_tid,
+        };
+        self.current_tid = stopped_tid;
 
         let reason = match status {
-            WaitStatus::Stopped(_, Signal::SIGTRAP) => {
+            WaitStatus::Stopped(tid, Signal::SIGTRAP) => {
                 self.state = ProcessState::Stopped;
-                self.classify_sigtrap()?
+                self.classify_sigtrap_for(tid)?
             }
             WaitStatus::Stopped(_, sig) => {
                 self.state = ProcessState::Stopped;
                 StopReason::Signal(sig)
             }
-            WaitStatus::Exited(_, code) => {
-                self.state = ProcessState::Exited;
-                self.is_attached = false;
+            WaitStatus::Exited(tid, code) => {
+                // Remove the exited thread
+                self.threads.retain(|&t| t != tid);
+                if tid == self.pid {
+                    // Main thread exited
+                    self.state = ProcessState::Exited;
+                    self.is_attached = false;
+                }
                 StopReason::Exited(code)
             }
-            WaitStatus::Signaled(_, sig, _) => {
-                self.state = ProcessState::Terminated;
-                self.is_attached = false;
+            WaitStatus::Signaled(tid, sig, _) => {
+                self.threads.retain(|&t| t != tid);
+                if tid == self.pid {
+                    self.state = ProcessState::Terminated;
+                    self.is_attached = false;
+                }
                 StopReason::Terminated(sig)
             }
             WaitStatus::PtraceSyscall(_) => {
                 self.state = ProcessState::Stopped;
                 self.classify_syscall()?
             }
-            WaitStatus::PtraceEvent(_, _, event) => {
+            WaitStatus::PtraceEvent(tid, _, event) => {
                 self.state = ProcessState::Stopped;
                 if event == libc::PTRACE_EVENT_CLONE as i32 {
-                    let new_pid = ptrace::getevent(self.pid)
+                    let new_pid_raw = ptrace::getevent(tid)
                         .map_err(|e| Error::Process(format!("getevent: {}", e)))?;
-                    StopReason::ThreadCreated(Pid::from_raw(new_pid as i32))
+                    let new_tid = Pid::from_raw(new_pid_raw as i32);
+
+                    // Wait for the new thread's initial SIGSTOP
+                    let _ = waitpid(new_tid, Some(WaitPidFlag::__WALL));
+
+                    // Configure ptrace options on the new thread
+                    let _ = ptrace::setoptions(
+                        new_tid,
+                        ptrace::Options::PTRACE_O_TRACECLONE
+                            | ptrace::Options::PTRACE_O_TRACESYSGOOD,
+                    );
+
+                    // Track the new thread
+                    if !self.threads.contains(&new_tid) {
+                        self.threads.push(new_tid);
+                    }
+
+                    // Resume the new thread so it can run
+                    let _ = ptrace::cont(new_tid, None);
+
+                    StopReason::ThreadCreated(new_tid)
                 } else {
                     StopReason::SingleStep
                 }
@@ -299,9 +380,28 @@ impl Process {
         Ok(buf)
     }
 
-    /// Get the process ID.
+    /// Get the thread-group leader PID.
     pub fn pid(&self) -> Pid {
         self.pid
+    }
+
+    /// Get the TID of the thread that last stopped (or the current thread).
+    pub fn current_tid(&self) -> Pid {
+        self.current_tid
+    }
+
+    /// Set the current thread for subsequent operations.
+    pub fn set_current_tid(&mut self, tid: Pid) -> Result<()> {
+        if !self.threads.contains(&tid) {
+            return Err(Error::Process(format!("unknown thread: {}", tid)));
+        }
+        self.current_tid = tid;
+        Ok(())
+    }
+
+    /// Get the list of all known thread TIDs.
+    pub fn thread_list(&self) -> &[Pid] {
+        &self.threads
     }
 
     /// Get the current process state.
@@ -311,7 +411,7 @@ impl Process {
 
     /// Classify a syscall stop as entry or exit.
     fn classify_syscall(&mut self) -> Result<StopReason> {
-        let regs = ptrace::getregs(self.pid)?;
+        let regs = ptrace::getregs(self.current_tid)?;
         if self.expecting_syscall_exit {
             self.expecting_syscall_exit = false;
             Ok(StopReason::SyscallExit {
@@ -327,16 +427,14 @@ impl Process {
         }
     }
 
-    /// Classify a SIGTRAP into a more specific stop reason.
-    fn classify_sigtrap(&self) -> Result<StopReason> {
-        // Use PTRACE_GETSIGINFO to distinguish breakpoint from single-step.
-        let siginfo = ptrace::getsiginfo(self.pid)?;
+    /// Classify a SIGTRAP into a more specific stop reason for a given TID.
+    fn classify_sigtrap_for(&self, tid: Pid) -> Result<StopReason> {
+        let siginfo = ptrace::getsiginfo(tid)?;
 
         match siginfo.si_code {
             // SI_KERNEL (0x80) or TRAP_BRKPT (1): software breakpoint
             0x80 | 1 => {
-                let regs = ptrace::getregs(self.pid)?;
-                // INT3 advances RIP past the 0xCC byte, so the BP address is rip-1
+                let regs = ptrace::getregs(tid)?;
                 let bp_addr = VirtAddr(regs.rip - 1);
                 Ok(StopReason::BreakpointHit { addr: bp_addr })
             }
@@ -344,20 +442,17 @@ impl Process {
             2 => Ok(StopReason::SingleStep),
             // TRAP_HWBKPT (4): hardware watchpoint/breakpoint
             4 => {
-                // Read DR6 to find which slot triggered
-                let dr6 = read_debug_reg(self.pid, 6)?;
+                let dr6 = read_debug_reg(tid, 6)?;
                 for i in 0..4 {
                     if dr6 & (1 << i) != 0 {
-                        let addr = read_debug_reg(self.pid, i)?;
-                        // Clear DR6 status bits
-                        write_debug_reg(self.pid, 6, 0)?;
+                        let addr = read_debug_reg(tid, i)?;
+                        write_debug_reg(tid, 6, 0)?;
                         return Ok(StopReason::WatchpointHit {
                             slot: i,
                             addr: VirtAddr(addr),
                         });
                     }
                 }
-                // DR6 didn't identify a slot; treat as single-step
                 Ok(StopReason::SingleStep)
             }
             _ => Ok(StopReason::SingleStep),
@@ -369,10 +464,16 @@ impl Drop for Process {
     fn drop(&mut self) {
         if self.is_attached {
             if self.terminate_on_end {
+                // Kill the entire thread group
                 let _ = nix::sys::signal::kill(self.pid, Signal::SIGKILL);
-                let _ = waitpid(self.pid, None);
+                for &tid in &self.threads {
+                    let _ = waitpid(tid, None);
+                }
             } else {
-                let _ = ptrace::detach(self.pid, None);
+                // Detach from all threads
+                for &tid in &self.threads {
+                    let _ = ptrace::detach(tid, None);
+                }
             }
         }
     }
