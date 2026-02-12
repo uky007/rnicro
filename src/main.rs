@@ -108,6 +108,8 @@ mod linux {
             "watchpoint" | "watch" | "wp" => cmd_watchpoint(target, args),
             "catchpoint" | "catch" => cmd_catchpoint(target, args),
             "signal" | "sig" => cmd_signal(target, args),
+            "print" | "p" => cmd_print(target, args),
+            "locals" | "info locals" => cmd_locals(target),
             "threads" | "thr" => cmd_threads(target),
             "thread" | "t" => cmd_thread(target, args),
             "libs" | "sharedlib" => cmd_libs(target),
@@ -552,6 +554,67 @@ mod linux {
         Ok(())
     }
 
+    fn cmd_print(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        if args.is_empty() {
+            println!("usage: print <variable_name>");
+            return Ok(());
+        }
+        let name = args[0];
+        match target.read_variable(name) {
+            Ok(Some((var, formatted))) => {
+                println!(
+                    "  {} ({}) = {}",
+                    var.name.bold(),
+                    var.type_info.name.dimmed(),
+                    formatted.cyan()
+                );
+            }
+            Ok(None) => {
+                println!("  variable '{}' not found at current PC", name);
+            }
+            Err(e) => {
+                println!("  {}: {}", "error".red(), e);
+            }
+        }
+        Ok(())
+    }
+
+    fn cmd_locals(target: &mut Target) -> anyhow::Result<()> {
+        match target.list_variables() {
+            Ok(vars) => {
+                if vars.is_empty() {
+                    println!("  {}", "no local variables in scope".yellow());
+                } else {
+                    for var in &vars {
+                        // Try to read each variable's value
+                        match target.read_variable(&var.name) {
+                            Ok(Some((_, formatted))) => {
+                                println!(
+                                    "  {} ({}) = {}",
+                                    var.name.bold(),
+                                    var.type_info.name.dimmed(),
+                                    formatted.cyan()
+                                );
+                            }
+                            _ => {
+                                println!(
+                                    "  {} ({}) = {}",
+                                    var.name.bold(),
+                                    var.type_info.name.dimmed(),
+                                    "<unavailable>".dimmed()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                println!("  {}: {}", "error".red(), e);
+            }
+        }
+        Ok(())
+    }
+
     fn cmd_threads(target: &mut Target) -> anyhow::Result<()> {
         let threads = target.thread_list();
         let current = target.current_tid();
@@ -715,6 +778,14 @@ mod linux {
         );
         println!("    signal handle <sig> <act>  set policy (stop|nostop|pass|nopass)");
         println!("    signal list                show all signal policies");
+        println!(
+            "  {} (p)             print a variable's value",
+            "print".bold()
+        );
+        println!(
+            "  {}             list local variables",
+            "locals".bold()
+        );
         println!(
             "  {} (thr)          list all threads",
             "threads".bold()

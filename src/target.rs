@@ -15,6 +15,7 @@ use crate::procfs::{self, MemoryRegion};
 use crate::registers::{self, Registers};
 use crate::types::{ProcessState, StopReason, VirtAddr};
 use crate::unwind::Unwinder;
+use crate::variables::{self, Variable, VariableReader};
 use crate::watchpoint::{WatchpointManager, WatchpointType, WatchpointSize, Watchpoint};
 use crate::shared_lib::{self, SharedLibrary};
 
@@ -61,6 +62,7 @@ pub struct Target {
     program_path: String,
     elf: ElfFile,
     dwarf: Option<DwarfInfo>,
+    var_reader: Option<VariableReader>,
     unwinder: Option<Unwinder>,
     /// Per-signal handling policy.
     signal_policies: HashMap<Signal, SignalPolicy>,
@@ -78,6 +80,7 @@ impl Target {
         let process = Process::launch(program, args)?;
         let elf = ElfFile::load(program)?;
         let dwarf = DwarfInfo::load(program).ok();
+        let var_reader = VariableReader::load(program).ok();
         let unwinder = Unwinder::load(program).ok();
         Ok(Target {
             program_path: program.to_string_lossy().into_owned(),
@@ -86,6 +89,7 @@ impl Target {
             watchpoints: WatchpointManager::new(),
             elf,
             dwarf,
+            var_reader,
             unwinder,
             signal_policies: HashMap::new(),
             pending_signal: None,
@@ -100,6 +104,7 @@ impl Target {
         let exe_path = format!("/proc/{}/exe", pid);
         let elf = ElfFile::load(Path::new(&exe_path))?;
         let dwarf = DwarfInfo::load(Path::new(&exe_path)).ok();
+        let var_reader = VariableReader::load(Path::new(&exe_path)).ok();
         let unwinder = Unwinder::load(Path::new(&exe_path)).ok();
         Ok(Target {
             program_path: exe_path,
@@ -108,6 +113,7 @@ impl Target {
             watchpoints: WatchpointManager::new(),
             elf,
             dwarf,
+            var_reader,
             unwinder,
             signal_policies: HashMap::new(),
             pending_signal: None,
@@ -453,6 +459,74 @@ impl Target {
     /// Check whether DWARF debug info is available.
     pub fn has_debug_info(&self) -> bool {
         self.dwarf.is_some()
+    }
+
+    // ── Variables ──────────────────────────────────────────────────
+
+    /// Read and format a variable by name at the current PC.
+    pub fn read_variable(&self, name: &str) -> Result<Option<(Variable, String)>> {
+        let var_reader = self
+            .var_reader
+            .as_ref()
+            .ok_or_else(|| Error::Other("no DWARF variable info".into()))?;
+
+        let regs = self.read_registers()?;
+        let pc = regs.pc();
+
+        let var = match var_reader.find_variable(pc, name)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        let encoding = var_reader.encoding_for_pc(pc)?;
+        let dwarf_regs = self.dwarf_register_snapshot(&regs);
+
+        let ctx = crate::dwarf_expr::EvalContext {
+            registers: &dwarf_regs,
+            cfa: 0, // TODO: compute via CFI
+            frame_base: Some(regs.get("rbp").unwrap_or(0)),
+            read_memory: &|addr, len| self.process.read_memory(VirtAddr(addr), len),
+        };
+
+        let result =
+            crate::dwarf_expr::evaluate(&var.location_expr, encoding, &ctx)?;
+
+        let formatted = match &result {
+            crate::dwarf_expr::ExprResult::Address(addr) => {
+                let data = self
+                    .process
+                    .read_memory(VirtAddr(*addr), var.type_info.byte_size as usize)?;
+                variables::format_value(&data, &var.type_info)
+            }
+            crate::dwarf_expr::ExprResult::Register(reg) => {
+                let val = dwarf_regs
+                    .iter()
+                    .find(|(r, _)| *r == *reg)
+                    .map(|(_, v)| *v)
+                    .unwrap_or(0);
+                let data = val.to_le_bytes();
+                variables::format_value(&data, &var.type_info)
+            }
+            crate::dwarf_expr::ExprResult::Constant(val) => {
+                let data = val.to_le_bytes();
+                variables::format_value(&data, &var.type_info)
+            }
+            crate::dwarf_expr::ExprResult::OptimizedOut => "<optimized out>".into(),
+            crate::dwarf_expr::ExprResult::Pieces(_) => "<multi-piece>".into(),
+        };
+
+        Ok(Some((var, formatted)))
+    }
+
+    /// List all variables visible at the current PC.
+    pub fn list_variables(&self) -> Result<Vec<Variable>> {
+        let var_reader = self
+            .var_reader
+            .as_ref()
+            .ok_or_else(|| Error::Other("no DWARF variable info".into()))?;
+
+        let pc = self.read_registers()?.pc();
+        var_reader.find_variables_at(pc)
     }
 
     // ── Threads ─────────────────────────────────────────────────────
