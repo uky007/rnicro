@@ -12,6 +12,93 @@ use object::{Object, ObjectSymbol, SymbolKind};
 use crate::error::{Error, Result};
 use crate::types::VirtAddr;
 
+/// A GOT/PLT relocation entry parsed from the ELF.
+#[derive(Debug, Clone)]
+pub struct GotPltEntry {
+    /// Address of the GOT slot.
+    pub got_addr: u64,
+    /// Symbol name from dynamic symbol table.
+    pub name: String,
+    /// PLT stub address (estimated from PLT section layout).
+    pub plt_addr: Option<u64>,
+}
+
+/// Parse GOT/PLT relocation entries from ELF binary data.
+///
+/// Reads `.rela.plt` relocations to find each GOT slot and its
+/// associated dynamic symbol. PLT addresses are estimated from
+/// the `.plt` section layout (16 bytes per entry, first entry is PLT0).
+pub fn parse_got_plt(data: &[u8]) -> Result<Vec<GotPltEntry>> {
+    let elf = goblin::elf::Elf::parse(data)
+        .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+
+    // Find .plt section for PLT address estimation
+    let plt_section = elf.section_headers.iter().find(|sh| {
+        elf.shdr_strtab
+            .get_at(sh.sh_name)
+            .map(|name| name == ".plt")
+            .unwrap_or(false)
+    });
+
+    let mut entries = Vec::new();
+
+    for (i, reloc) in elf.pltrelocs.iter().enumerate() {
+        let sym_idx = reloc.r_sym;
+        let name = if let Some(sym) = elf.dynsyms.get(sym_idx) {
+            elf.dynstrtab
+                .get_at(sym.st_name)
+                .unwrap_or("<unknown>")
+                .to_string()
+        } else {
+            format!("<sym_{}>", sym_idx)
+        };
+
+        // PLT entry = .plt base + 16 (PLT0) + i * 16
+        let plt_addr = plt_section.map(|sh| sh.sh_addr + 16 + (i as u64) * 16);
+
+        entries.push(GotPltEntry {
+            got_addr: reloc.r_offset,
+            name,
+            plt_addr,
+        });
+    }
+
+    Ok(entries)
+}
+
+/// Parse all dynamic relocations (from .rela.dyn) to find GOT entries.
+pub fn parse_got_dyn(data: &[u8]) -> Result<Vec<GotPltEntry>> {
+    let elf = goblin::elf::Elf::parse(data)
+        .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+
+    let mut entries = Vec::new();
+
+    for reloc in elf.dynrelas.iter() {
+        let sym_idx = reloc.r_sym;
+        if sym_idx == 0 {
+            continue;
+        }
+        let name = if let Some(sym) = elf.dynsyms.get(sym_idx) {
+            elf.dynstrtab
+                .get_at(sym.st_name)
+                .unwrap_or("<unknown>")
+                .to_string()
+        } else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        entries.push(GotPltEntry {
+            got_addr: reloc.r_offset,
+            name,
+            plt_addr: None,
+        });
+    }
+
+    Ok(entries)
+}
+
 /// Classification of ELF symbols.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolType {

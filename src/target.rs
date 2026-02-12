@@ -6,13 +6,15 @@
 //! used by the CLI.
 
 use crate::breakpoint::BreakpointManager;
+use crate::checksec::{self, ChecksecResult};
 use crate::disasm::{self, DisasmInstruction, DisasmStyle};
 use crate::dwarf::{DwarfInfo, SourceLocation};
-use crate::elf::ElfFile;
+use crate::elf::{self, ElfFile, GotPltEntry};
 use crate::error::{Error, Result};
 use crate::process::Process;
 use crate::procfs::{self, MemoryRegion};
 use crate::registers::{self, Registers};
+use crate::strings::{self, ExtractedString};
 use crate::types::{ProcessState, StopReason, VirtAddr};
 use crate::unwind::Unwinder;
 use crate::variables::{self, Variable, VariableReader};
@@ -389,9 +391,49 @@ impl Target {
         self.process.read_memory(addr, len)
     }
 
+    /// Write memory to the tracee.
+    pub fn write_memory(&self, addr: VirtAddr, data: &[u8]) -> Result<()> {
+        self.process.write_memory(addr, data)
+    }
+
     /// Read the tracee's memory maps from `/proc/pid/maps`.
     pub fn memory_maps(&self) -> Result<Vec<MemoryRegion>> {
         procfs::read_memory_maps(self.process.pid())
+    }
+
+    // ── Security analysis ─────────────────────────────────────────
+
+    /// Run checksec analysis on the program binary.
+    pub fn checksec(&self) -> Result<ChecksecResult> {
+        checksec::checksec(Path::new(&self.program_path))
+    }
+
+    /// Parse GOT/PLT entries from the program binary.
+    ///
+    /// Returns entries with static addresses from the ELF. For PIE binaries,
+    /// use `read_got_runtime()` to get actual resolved addresses.
+    pub fn got_plt_entries(&self) -> Result<Vec<GotPltEntry>> {
+        let data = std::fs::read(&self.program_path)
+            .map_err(|e| Error::Other(format!("read binary: {}", e)))?;
+        elf::parse_got_plt(&data)
+    }
+
+    /// Parse all dynamic GOT entries (from .rela.dyn).
+    pub fn got_dyn_entries(&self) -> Result<Vec<GotPltEntry>> {
+        let data = std::fs::read(&self.program_path)
+            .map_err(|e| Error::Other(format!("read binary: {}", e)))?;
+        elf::parse_got_dyn(&data)
+    }
+
+    /// Read the runtime value of a GOT slot from the live process.
+    pub fn read_got_value(&self, got_addr: u64) -> Result<u64> {
+        let bytes = self.process.read_memory(VirtAddr(got_addr), 8)?;
+        Ok(u64::from_le_bytes(bytes[..8].try_into().unwrap()))
+    }
+
+    /// Extract printable strings from the program binary.
+    pub fn extract_strings(&self, min_length: usize) -> Result<Vec<ExtractedString>> {
+        strings::extract_strings(Path::new(&self.program_path), min_length)
     }
 
     // ── Shared libraries ─────────────────────────────────────────

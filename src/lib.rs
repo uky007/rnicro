@@ -28,6 +28,8 @@ pub mod expr_eval;
 pub mod variables;
 pub mod unwind;
 pub mod syscall;
+pub mod checksec;
+pub mod strings;
 
 // Linux-only modules (ptrace, user_regs_struct, etc.)
 #[cfg(target_os = "linux")]

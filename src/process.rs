@@ -380,6 +380,19 @@ impl Process {
         Ok(buf)
     }
 
+    /// Write arbitrary bytes to tracee memory via /proc/pid/mem.
+    pub fn write_memory(&self, addr: VirtAddr, data: &[u8]) -> Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(format!("/proc/{}/mem", self.pid))
+            .map_err(|e| Error::Process(format!("/proc/pid/mem write: {}", e)))?;
+        file.seek(SeekFrom::Start(addr.addr()))?;
+        file.write_all(data)?;
+        Ok(())
+    }
+
     /// Get the thread-group leader PID.
     pub fn pid(&self) -> Pid {
         self.pid

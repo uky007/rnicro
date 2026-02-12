@@ -25,7 +25,11 @@ mod linux {
     #[command(name = "rnicro", about = "A Linux x86_64 debugger")]
     struct Cli {
         /// Program to debug
-        program: PathBuf,
+        program: Option<PathBuf>,
+
+        /// Attach to a running process by PID
+        #[arg(short = 'p', long = "attach")]
+        attach_pid: Option<i32>,
 
         /// Arguments to pass to the program
         #[arg(trailing_var_arg = true)]
@@ -35,15 +39,30 @@ mod linux {
     pub fn run() -> anyhow::Result<()> {
         let cli = Cli::parse();
 
-        let args_ref: Vec<&str> = cli.args.iter().map(|s| s.as_str()).collect();
-        let mut target = Target::launch(&cli.program, &args_ref)?;
+        let mut target = if let Some(pid) = cli.attach_pid {
+            let pid = nix::unistd::Pid::from_raw(pid);
+            let t = Target::attach(pid)?;
+            println!(
+                "{} attached to process {}",
+                "rnicro".bold().cyan(),
+                pid,
+            );
+            t
+        } else if let Some(ref program) = cli.program {
+            let args_ref: Vec<&str> = cli.args.iter().map(|s| s.as_str()).collect();
+            let t = Target::launch(program, &args_ref)?;
+            println!(
+                "{} launched process {} ({})",
+                "rnicro".bold().cyan(),
+                t.pid(),
+                program.display()
+            );
+            t
+        } else {
+            eprintln!("error: provide a program to debug or use --attach <pid>");
+            std::process::exit(1);
+        };
 
-        println!(
-            "{} launched process {} ({})",
-            "rnicro".bold().cyan(),
-            target.pid(),
-            cli.program.display()
-        );
         if target.has_debug_info() {
             println!("  debug info: {}", "available".green());
         } else {
@@ -113,6 +132,9 @@ mod linux {
             "threads" | "thr" => cmd_threads(target),
             "thread" | "t" => cmd_thread(target, args),
             "libs" | "sharedlib" => cmd_libs(target),
+            "checksec" => cmd_checksec(target),
+            "got" | "plt" => cmd_got(target, args),
+            "strings" | "str" => cmd_strings(target, args),
             "list" | "l" => cmd_list(target),
             "help" | "h" => cmd_help(),
             "quit" | "q" => std::process::exit(0),
@@ -245,6 +267,7 @@ mod linux {
     fn cmd_memory(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
         if args.is_empty() {
             println!("usage: memory read <address> [length]");
+            println!("       memory write <address> <hex_bytes>");
             println!("       memory maps");
             return Ok(());
         }
@@ -259,6 +282,22 @@ mod linux {
                 let len: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(64);
                 let data = target.read_memory(addr, len)?;
                 print_hexdump(addr, &data);
+            }
+            "write" | "w" => {
+                if args.len() < 3 {
+                    println!("usage: memory write <address> <hex_bytes>");
+                    println!("  hex_bytes: continuous hex string, e.g. 90909090 or cc");
+                    return Ok(());
+                }
+                let addr = VirtAddr(parse_address(args[1])?);
+                let hex_str: String = args[2..].join("");
+                let bytes = parse_hex_bytes(&hex_str)?;
+                target.write_memory(addr, &bytes)?;
+                println!(
+                    "  wrote {} byte(s) at {}",
+                    bytes.len(),
+                    format!("0x{:x}", addr.addr()).cyan()
+                );
             }
             "maps" | "m" => {
                 let maps = target.memory_maps()?;
@@ -707,6 +746,180 @@ mod linux {
         Ok(())
     }
 
+    fn cmd_checksec(target: &mut Target) -> anyhow::Result<()> {
+        use rnicro::checksec::SecurityStatus;
+
+        let result = target.checksec()?;
+        println!("  {}", "Security mechanisms:".bold());
+        println!(
+            "  {:>12}: {}",
+            "RELRO".bold(),
+            match result.relro {
+                SecurityStatus::Full => "Full RELRO".green().to_string(),
+                SecurityStatus::Partial => "Partial RELRO".yellow().to_string(),
+                SecurityStatus::None => "No RELRO".red().to_string(),
+            }
+        );
+        println!(
+            "  {:>12}: {}",
+            "Stack canary".bold(),
+            if result.canary {
+                "Found".green().to_string()
+            } else {
+                "Not found".red().to_string()
+            }
+        );
+        println!(
+            "  {:>12}: {}",
+            "NX".bold(),
+            if result.nx {
+                "Enabled".green().to_string()
+            } else {
+                "Disabled".red().to_string()
+            }
+        );
+        println!(
+            "  {:>12}: {}",
+            "PIE".bold(),
+            if result.pie {
+                "Enabled".green().to_string()
+            } else {
+                "Disabled".yellow().to_string()
+            }
+        );
+        println!(
+            "  {:>12}: {}",
+            "FORTIFY".bold(),
+            if result.fortify {
+                "Enabled".green().to_string()
+            } else {
+                "Not found".yellow().to_string()
+            }
+        );
+        if result.rpath {
+            println!(
+                "  {:>12}: {}",
+                "RPATH".bold(),
+                "Present (potential hijack vector)".yellow()
+            );
+        }
+        if result.runpath {
+            println!(
+                "  {:>12}: {}",
+                "RUNPATH".bold(),
+                "Present (potential hijack vector)".yellow()
+            );
+        }
+        Ok(())
+    }
+
+    fn cmd_got(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        let show_dyn = args.first().copied() == Some("--all") || args.first().copied() == Some("-a");
+
+        let entries = target.got_plt_entries()?;
+        if entries.is_empty() {
+            println!("  {}", "no GOT/PLT entries found (statically linked?)".yellow());
+        } else {
+            println!("  {}", "GOT/PLT entries:".bold());
+            println!(
+                "  {:>18}  {:>18}  {:>18}  {}",
+                "GOT addr".bold(),
+                "PLT addr".bold(),
+                "resolved".bold(),
+                "symbol".bold()
+            );
+            for entry in &entries {
+                let resolved = match target.read_got_value(entry.got_addr) {
+                    Ok(val) => format!("0x{:016x}", val),
+                    Err(_) => "<unreadable>".to_string(),
+                };
+                let plt_str = match entry.plt_addr {
+                    Some(addr) => format!("0x{:016x}", addr),
+                    None => "-".to_string(),
+                };
+                println!(
+                    "  0x{:016x}  {:>18}  {}  {}",
+                    entry.got_addr,
+                    plt_str,
+                    resolved.cyan(),
+                    entry.name.bold()
+                );
+            }
+        }
+
+        if show_dyn {
+            let dyn_entries = target.got_dyn_entries()?;
+            if !dyn_entries.is_empty() {
+                println!();
+                println!("  {}", "Dynamic GOT entries (.rela.dyn):".bold());
+                for entry in &dyn_entries {
+                    let resolved = match target.read_got_value(entry.got_addr) {
+                        Ok(val) => format!("0x{:016x}", val),
+                        Err(_) => "<unreadable>".to_string(),
+                    };
+                    println!(
+                        "  0x{:016x}  {}  {}",
+                        entry.got_addr,
+                        resolved.cyan(),
+                        entry.name.bold()
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn cmd_strings(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        let min_len: usize = args
+            .first()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(4);
+        let max_results: usize = args
+            .get(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(200);
+
+        let strings = target.extract_strings(min_len)?;
+        let total = strings.len();
+
+        if strings.is_empty() {
+            println!("  {}", "no strings found".yellow());
+            return Ok(());
+        }
+
+        println!(
+            "  {} string(s) found (min length: {}, showing up to {}):",
+            total, min_len, max_results
+        );
+        for s in strings.iter().take(max_results) {
+            let section = if s.section.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", s.section.dimmed())
+            };
+            // Truncate very long strings for display
+            let display = if s.content.len() > 120 {
+                format!("{}...", &s.content[..120])
+            } else {
+                s.content.clone()
+            };
+            println!(
+                "  {:016x}{}  {}",
+                s.addr,
+                section,
+                display.cyan()
+            );
+        }
+        if total > max_results {
+            println!(
+                "  ... and {} more (use 'strings <min_len> <max_count>' to show more)",
+                total - max_results
+            );
+        }
+        Ok(())
+    }
+
     fn cmd_help() -> anyhow::Result<()> {
         println!("{}", "rnicro - Linux x86_64 debugger".bold());
         println!();
@@ -742,11 +955,12 @@ mod linux {
         println!("    breakpoint delete <a>  remove a breakpoint");
         println!("    breakpoint list        list all breakpoints");
         println!(
-            "  {} (x)            read memory / maps",
+            "  {} (x)            read/write memory / maps",
             "memory".bold()
         );
-        println!("    memory read <addr> [n] hex dump");
-        println!("    memory maps            show memory mappings");
+        println!("    memory read <addr> [n]  hex dump");
+        println!("    memory write <addr> <h> write hex bytes (e.g. 90909090)");
+        println!("    memory maps             show memory mappings");
         println!(
             "  {} (d)     disassemble instructions",
             "disassemble".bold()
@@ -797,6 +1011,19 @@ mod linux {
         println!(
             "  {} (libs)           list loaded shared libraries",
             "sharedlib".bold()
+        );
+        println!(
+            "  {}            analyze binary security features",
+            "checksec".bold()
+        );
+        println!(
+            "  {} / {}             show GOT/PLT entries (--all for .rela.dyn)",
+            "got".bold(),
+            "plt".bold()
+        );
+        println!(
+            "  {} (str)         extract strings [min_len] [max_count]",
+            "strings".bold()
         );
         println!(
             "  {} (l)              show source at current PC",
@@ -942,5 +1169,31 @@ mod linux {
         let s = s.strip_prefix("0x").unwrap_or(s);
         u64::from_str_radix(s, 16)
             .map_err(|e| anyhow::anyhow!("invalid address '{}': {}", s, e))
+    }
+
+    /// Parse a hex string like "90909090" or "cc90" into bytes.
+    fn parse_hex_bytes(s: &str) -> anyhow::Result<Vec<u8>> {
+        let s = s.strip_prefix("0x").unwrap_or(s);
+        // Remove any whitespace or \x separators
+        let clean: String = s
+            .replace("\\x", "")
+            .replace(' ', "")
+            .replace(':', "");
+
+        if clean.len() % 2 != 0 {
+            return Err(anyhow::anyhow!(
+                "hex string must have even number of digits, got {}",
+                clean.len()
+            ));
+        }
+
+        let mut bytes = Vec::with_capacity(clean.len() / 2);
+        for chunk in clean.as_bytes().chunks(2) {
+            let hex = std::str::from_utf8(chunk).unwrap();
+            let byte = u8::from_str_radix(hex, 16)
+                .map_err(|_| anyhow::anyhow!("invalid hex byte: '{}'", hex))?;
+            bytes.push(byte);
+        }
+        Ok(bytes)
     }
 }
