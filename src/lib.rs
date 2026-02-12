@@ -39,6 +39,11 @@ pub mod heap;
 pub mod coredump;
 pub mod gdb_rsp;
 pub mod syscall_trace;
+pub mod fmtstr;
+pub mod memscan;
+pub mod got_hook;
+pub mod shellcode;
+pub mod sigrop;
 
 // Linux-only modules (ptrace, user_regs_struct, etc.)
 #[cfg(target_os = "linux")]

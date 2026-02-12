@@ -144,6 +144,11 @@ mod linux {
             "heap" => cmd_heap(target, args),
             "coredump" | "core" => cmd_coredump(target, args),
             "strace" => cmd_strace(target, args),
+            "scan" | "search" => cmd_scan(target, args),
+            "hook" => cmd_hook(target, args),
+            "fmtstr" | "fmt" => cmd_fmtstr(args),
+            "shellcode" | "sc" => cmd_shellcode(args),
+            "sigrop" | "srop" => cmd_sigrop(args),
             "list" | "l" => cmd_list(target),
             "help" | "h" => cmd_help(),
             "quit" | "q" => std::process::exit(0),
@@ -1272,6 +1277,294 @@ mod linux {
         Ok(())
     }
 
+    fn cmd_scan(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        if args.is_empty() {
+            println!("usage: scan pattern <hex_pattern>   (e.g. scan pattern 48 8B ?? 05)");
+            println!("       scan bytes <hex_string>      (e.g. scan bytes 48656c6c6f)");
+            println!("       scan string <text>           (e.g. scan string /bin/sh)");
+            return Ok(());
+        }
+        match args[0] {
+            "pattern" | "p" => {
+                if args.len() < 2 {
+                    println!("usage: scan pattern <hex_pattern>");
+                    return Ok(());
+                }
+                let pattern = args[1..].join(" ");
+                let matches = target.scan_hex_pattern(&pattern)?;
+                print_scan_results(&matches);
+            }
+            "bytes" | "b" => {
+                if args.len() < 2 {
+                    println!("usage: scan bytes <hex_string>");
+                    return Ok(());
+                }
+                let bytes = parse_hex_bytes(args[1])?;
+                let matches = target.scan_bytes(&bytes)?;
+                print_scan_results(&matches);
+            }
+            "string" | "s" => {
+                if args.len() < 2 {
+                    println!("usage: scan string <text>");
+                    return Ok(());
+                }
+                let text = args[1..].join(" ");
+                let matches = target.scan_bytes(text.as_bytes())?;
+                print_scan_results(&matches);
+            }
+            sub => println!("unknown scan subcommand: {} (use pattern|bytes|string)", sub),
+        }
+        Ok(())
+    }
+
+    fn print_scan_results(matches: &[rnicro::memscan::ScanMatch]) {
+        if matches.is_empty() {
+            println!("  {}", "no matches found".yellow());
+            return;
+        }
+        let max_show = 100;
+        println!("  {} match(es) found:", matches.len().to_string().bold());
+        for m in matches.iter().take(max_show) {
+            let hex: String = m.matched_bytes.iter().map(|b| format!("{:02x}", b)).collect();
+            println!("  0x{:016x}  {}", m.address, hex.cyan());
+        }
+        if matches.len() > max_show {
+            println!("  ... and {} more", matches.len() - max_show);
+        }
+    }
+
+    fn cmd_hook(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        match args.first().copied() {
+            Some("install") | Some("set") => {
+                if args.len() < 3 {
+                    println!("usage: hook install <function> <target_addr>");
+                    return Ok(());
+                }
+                let func = args[1];
+                let target_addr = parse_address(args[2])?;
+                let idx = target.install_got_hook(func, target_addr)?;
+                println!(
+                    "  hook #{} installed: {} -> {}",
+                    idx,
+                    func.bold(),
+                    format!("0x{:x}", target_addr).cyan()
+                );
+            }
+            Some("remove") | Some("rm") => {
+                if args.len() < 2 {
+                    println!("usage: hook remove <function>");
+                    return Ok(());
+                }
+                target.remove_got_hook(args[1])?;
+                println!("  hook for {} removed", args[1].bold());
+            }
+            Some("list") | Some("l") | None => {
+                let hooks = target.list_got_hooks();
+                if hooks.is_empty() {
+                    println!("  {}", "no active GOT hooks".yellow());
+                } else {
+                    println!(
+                        "  {:>18}  {:>18}  {:>18}  {}",
+                        "GOT addr".bold(),
+                        "original".bold(),
+                        "hooked to".bold(),
+                        "function".bold()
+                    );
+                    for h in &hooks {
+                        println!(
+                            "  0x{:016x}  0x{:016x}  0x{:016x}  {}",
+                            h.got_address.addr(),
+                            h.original_target,
+                            h.hook_target,
+                            h.function_name.bold()
+                        );
+                    }
+                }
+            }
+            Some(sub) => println!("unknown hook subcommand: {} (use install|remove|list)", sub),
+        }
+        Ok(())
+    }
+
+    fn cmd_fmtstr(args: &[&str]) -> anyhow::Result<()> {
+        match args.first().copied() {
+            Some("offset") | Some("o") => {
+                let num = args.get(1).and_then(|s| s.parse::<usize>().ok()).unwrap_or(20);
+                let payload = rnicro::fmtstr::generate_offset_finder("AAAAAAAA", num);
+                println!("  {}", "Offset finder payload:".bold());
+                println!("  {}", payload);
+                println!("  tip: send this as input, then use 'fmtstr parse <output>' to find offset");
+            }
+            Some("parse") => {
+                if args.len() < 2 {
+                    println!("usage: fmtstr parse <printf_output>");
+                    return Ok(());
+                }
+                let output = args[1..].join(" ");
+                match rnicro::fmtstr::find_offset(b"AAAAAAAA", &output) {
+                    Some(off) => println!("  stack offset: {}", off.to_string().bold()),
+                    None => println!("  {}", "offset not found in output".yellow()),
+                }
+            }
+            Some("write") => {
+                if args.len() < 4 {
+                    println!("usage: fmtstr write <offset> <address> <value> [num_bytes]");
+                    return Ok(());
+                }
+                let offset: usize = args[1].parse().map_err(|_| anyhow::anyhow!("bad offset"))?;
+                let address = parse_address(args[2])?;
+                let value = parse_address(args[3])?;
+                let num_bytes: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(8);
+
+                let config = rnicro::fmtstr::FmtStrConfig::x86_64(offset);
+                let writes = vec![rnicro::fmtstr::FmtWrite { address, value, num_bytes }];
+                let payload = rnicro::fmtstr::write_payload(&config, &writes)?;
+
+                println!("  payload ({} bytes):", payload.len());
+                print!("  ");
+                for b in &payload {
+                    if b.is_ascii_graphic() || *b == b' ' {
+                        print!("{}", *b as char);
+                    } else {
+                        print!("\\x{:02x}", b);
+                    }
+                }
+                println!();
+                println!("  hex: {}", payload.iter().map(|b| format!("{:02x}", b)).collect::<String>().cyan());
+            }
+            Some("leak") => {
+                if args.len() < 2 {
+                    println!("usage: fmtstr leak <offset1> [offset2] ...");
+                    return Ok(());
+                }
+                let offsets: Vec<usize> = args[1..]
+                    .iter()
+                    .filter_map(|s| s.parse().ok())
+                    .collect();
+                let payload = rnicro::fmtstr::leak_payload(&offsets);
+                println!("  {}", payload);
+            }
+            None => {
+                println!("usage: fmtstr offset [n]           generate offset finder");
+                println!("       fmtstr parse <output>       find offset from output");
+                println!("       fmtstr write <off> <a> <v>  generate %hhn write payload");
+                println!("       fmtstr leak <off1> [off2]   generate leak payload");
+            }
+            Some(sub) => println!("unknown fmtstr subcommand: {}", sub),
+        }
+        Ok(())
+    }
+
+    fn cmd_shellcode(args: &[&str]) -> anyhow::Result<()> {
+        match args.first().copied() {
+            Some("analyze") | Some("a") => {
+                if args.len() < 2 {
+                    println!("usage: shellcode analyze <hex_bytes>");
+                    return Ok(());
+                }
+                let bytes = parse_hex_bytes(args[1])?;
+                let result = rnicro::shellcode::analyze(&bytes, rnicro::shellcode::BAD_CHARS_BASIC);
+
+                println!("  size: {} bytes", result.size);
+                println!("  null bytes: {}", if result.has_null_bytes {
+                    format!("yes ({} found)", result.null_positions.len()).red().to_string()
+                } else {
+                    "none".green().to_string()
+                });
+                println!("  bad chars (null/CR/LF): {}", result.bad_chars.len());
+                println!("  syscall sites: {}", result.syscall_sites.len());
+                println!("  int 0x80 sites: {}", result.int80_sites.len());
+                for sled in &result.nop_sleds {
+                    println!("  NOP sled: offset {} ({} bytes)", sled.offset, sled.length);
+                }
+            }
+            Some("encode") | Some("e") => {
+                if args.len() < 3 {
+                    println!("usage: shellcode encode <hex_bytes> <xor_key_hex>");
+                    return Ok(());
+                }
+                let bytes = parse_hex_bytes(args[1])?;
+                let key = u8::from_str_radix(args[2].strip_prefix("0x").unwrap_or(args[2]), 16)
+                    .map_err(|_| anyhow::anyhow!("invalid key: {}", args[2]))?;
+                let encoded = rnicro::shellcode::xor_encode(&bytes, key);
+                println!("  encoded: {}", encoded.iter().map(|b| format!("{:02x}", b)).collect::<String>().cyan());
+            }
+            Some("findkey") | Some("fk") => {
+                if args.len() < 2 {
+                    println!("usage: shellcode findkey <hex_bytes>");
+                    return Ok(());
+                }
+                let bytes = parse_hex_bytes(args[1])?;
+                match rnicro::shellcode::find_xor_key(&bytes, rnicro::shellcode::BAD_CHARS_BASIC) {
+                    Some(key) => println!("  XOR key: {} (avoids null/CR/LF)", format!("0x{:02x}", key).bold()),
+                    None => println!("  {}", "no suitable key found".yellow()),
+                }
+            }
+            None => {
+                println!("usage: shellcode analyze <hex>    analyze shellcode properties");
+                println!("       shellcode encode <hex> <k> XOR encode with key");
+                println!("       shellcode findkey <hex>    find XOR key avoiding bad chars");
+            }
+            Some(sub) => println!("unknown shellcode subcommand: {}", sub),
+        }
+        Ok(())
+    }
+
+    fn cmd_sigrop(args: &[&str]) -> anyhow::Result<()> {
+        match args.first().copied() {
+            Some("execve") => {
+                if args.len() < 3 {
+                    println!("usage: sigrop execve <syscall_addr> <binsh_addr>");
+                    return Ok(());
+                }
+                let syscall_addr = parse_address(args[1])?;
+                let binsh_addr = parse_address(args[2])?;
+                let frame = rnicro::sigrop::execve_frame(syscall_addr, binsh_addr);
+                let bytes = frame.to_bytes();
+                println!("  execve(\"/bin/sh\") sigframe ({} bytes):", bytes.len());
+                println!("  rax={} rdi={} rip={}",
+                    "59".bold(), format!("0x{:x}", binsh_addr).cyan(), format!("0x{:x}", syscall_addr).cyan());
+                println!("  hex: {}", bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+            }
+            Some("mprotect") => {
+                if args.len() < 5 {
+                    println!("usage: sigrop mprotect <syscall_addr> <addr> <len> <prot>");
+                    return Ok(());
+                }
+                let syscall_addr = parse_address(args[1])?;
+                let addr = parse_address(args[2])?;
+                let len = parse_address(args[3])?;
+                let prot = parse_address(args[4])?;
+                let frame = rnicro::sigrop::mprotect_frame(syscall_addr, addr, len, prot);
+                let bytes = frame.to_bytes();
+                println!("  mprotect sigframe ({} bytes):", bytes.len());
+                println!("  hex: {}", bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+            }
+            Some("chain") => {
+                if args.len() < 4 {
+                    println!("usage: sigrop chain <sigret_addr> <syscall_addr> <binsh_addr>");
+                    return Ok(());
+                }
+                let sigret_addr = parse_address(args[1])?;
+                let syscall_addr = parse_address(args[2])?;
+                let binsh_addr = parse_address(args[3])?;
+                let chain = rnicro::sigrop::build_chain(
+                    sigret_addr,
+                    &[rnicro::sigrop::execve_frame(syscall_addr, binsh_addr)],
+                );
+                println!("  SROP chain ({} bytes):", chain.len());
+                println!("  hex: {}", chain.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+            }
+            None => {
+                println!("usage: sigrop execve <sys> <binsh>         execve frame");
+                println!("       sigrop mprotect <sys> <a> <l> <p>   mprotect frame");
+                println!("       sigrop chain <sigret> <sys> <binsh> full SROP chain");
+            }
+            Some(sub) => println!("unknown sigrop subcommand: {}", sub),
+        }
+        Ok(())
+    }
+
     fn cmd_help() -> anyhow::Result<()> {
         println!("{}", "rnicro - Linux x86_64 debugger".bold());
         println!();
@@ -1420,6 +1713,41 @@ mod linux {
         );
         println!("    strace on                   enable strace-like output");
         println!("    strace off                  disable tracing");
+        println!(
+            "  {}              scan process memory for patterns",
+            "scan".bold()
+        );
+        println!("    scan pattern <hex>          IDA-style hex pattern (e.g. 48 8B ?? 05)");
+        println!("    scan bytes <hex>            exact byte search");
+        println!("    scan string <text>          string search in memory");
+        println!(
+            "  {}               GOT/PLT function hooking",
+            "hook".bold()
+        );
+        println!("    hook install <func> <addr>  redirect function via GOT");
+        println!("    hook remove <func>          restore original GOT entry");
+        println!("    hook list                   show active hooks");
+        println!(
+            "  {} (fmt)          format string exploit helper",
+            "fmtstr".bold()
+        );
+        println!("    fmtstr offset [n]           offset finder payload");
+        println!("    fmtstr write <off> <a> <v>  %hhn write payload");
+        println!("    fmtstr leak <off1> ...      stack leak payload");
+        println!(
+            "  {} (sc)      shellcode analysis toolkit",
+            "shellcode".bold()
+        );
+        println!("    shellcode analyze <hex>     detect null/bad/syscall/NOP");
+        println!("    shellcode encode <hex> <k>  XOR encode");
+        println!("    shellcode findkey <hex>     find null-free XOR key");
+        println!(
+            "  {} (srop)         SROP chain builder",
+            "sigrop".bold()
+        );
+        println!("    sigrop execve <sys> <binsh> execve sigreturn frame");
+        println!("    sigrop mprotect <s> <a> ... mprotect sigreturn frame");
+        println!("    sigrop chain <sr> <s> <b>   full SROP chain");
         println!(
             "  {} (l)              show source at current PC",
             "list".bold()

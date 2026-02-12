@@ -6,6 +6,8 @@
 //! used by the CLI.
 
 use crate::antidebug::{self, AntiDebugFinding, BypassConfig};
+use crate::got_hook::GotHookManager;
+use crate::memscan::{self, ScanMatch};
 use crate::breakpoint::BreakpointManager;
 use crate::checksec::{self, ChecksecResult};
 use crate::disasm::{self, DisasmInstruction, DisasmStyle};
@@ -80,6 +82,8 @@ pub struct Target {
     catch_all_syscalls: bool,
     /// Anti-debug bypass configuration.
     bypass_config: BypassConfig,
+    /// GOT hook manager.
+    got_hooks: GotHookManager,
 }
 
 impl Target {
@@ -104,6 +108,7 @@ impl Target {
             caught_syscalls: HashSet::new(),
             catch_all_syscalls: false,
             bypass_config: BypassConfig::default(),
+            got_hooks: GotHookManager::new(),
         })
     }
 
@@ -129,6 +134,7 @@ impl Target {
             caught_syscalls: HashSet::new(),
             catch_all_syscalls: false,
             bypass_config: BypassConfig::default(),
+            got_hooks: GotHookManager::new(),
         })
     }
 
@@ -594,6 +600,88 @@ impl Target {
         };
 
         crate::coredump::generate(&info)
+    }
+
+    // ── Memory scanning ────────────────────────────────────────────
+
+    /// Scan process memory for an IDA-style hex pattern.
+    ///
+    /// Pattern format: `"48 8B ?? 05"` where `??` is a wildcard.
+    pub fn scan_hex_pattern(&self, hex_pattern: &str) -> Result<Vec<ScanMatch>> {
+        let (pattern, mask) = memscan::parse_hex_pattern(hex_pattern)?;
+        let maps = self.memory_maps()?;
+        let regions: Vec<(u64, u64)> = maps
+            .iter()
+            .filter(|m| m.perms.read)
+            .map(|m| (m.start.addr(), m.end.addr()))
+            .collect();
+
+        let read_mem = |addr: u64, len: usize| -> Result<Vec<u8>> {
+            self.process.read_memory(VirtAddr(addr), len)
+        };
+
+        memscan::scan_regions(&regions, &pattern, &mask, &read_mem)
+    }
+
+    /// Scan process memory for exact bytes.
+    pub fn scan_bytes(&self, needle: &[u8]) -> Result<Vec<ScanMatch>> {
+        let mask = vec![true; needle.len()];
+        let maps = self.memory_maps()?;
+        let regions: Vec<(u64, u64)> = maps
+            .iter()
+            .filter(|m| m.perms.read)
+            .map(|m| (m.start.addr(), m.end.addr()))
+            .collect();
+
+        let read_mem = |addr: u64, len: usize| -> Result<Vec<u8>> {
+            self.process.read_memory(VirtAddr(addr), len)
+        };
+
+        memscan::scan_regions(&regions, needle, &mask, &read_mem)
+    }
+
+    // ── GOT hooking ──────────────────────────────────────────────
+
+    /// Install a GOT hook: redirect a function to a different address.
+    pub fn install_got_hook(&mut self, function_name: &str, hook_target: u64) -> Result<usize> {
+        let entries = self.got_plt_entries()?;
+        let entry = entries
+            .iter()
+            .find(|e| e.name == function_name)
+            .ok_or_else(|| Error::Other(format!("GOT entry '{}' not found", function_name)))?;
+
+        let original = self.read_got_value(entry.got_addr)?;
+        self.process.write_memory(
+            VirtAddr(entry.got_addr),
+            &hook_target.to_le_bytes(),
+        )?;
+
+        let idx = self.got_hooks.record_hook(
+            function_name.to_string(),
+            VirtAddr(entry.got_addr),
+            original,
+            hook_target,
+        );
+        Ok(idx)
+    }
+
+    /// Remove a GOT hook: restore the original function pointer.
+    pub fn remove_got_hook(&mut self, function_name: &str) -> Result<()> {
+        let hook = self
+            .got_hooks
+            .get_hook(function_name)
+            .ok_or_else(|| Error::Other(format!("no active hook for '{}'", function_name)))?;
+        let got_addr = hook.got_address;
+        let original = hook.original_target;
+
+        self.process.write_memory(got_addr, &original.to_le_bytes())?;
+        self.got_hooks.deactivate_hook(function_name);
+        Ok(())
+    }
+
+    /// List all GOT hooks.
+    pub fn list_got_hooks(&self) -> Vec<&crate::got_hook::GotHook> {
+        self.got_hooks.active_hooks()
     }
 
     // ── Shared libraries ─────────────────────────────────────────
