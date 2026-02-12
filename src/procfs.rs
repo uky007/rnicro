@@ -109,6 +109,44 @@ pub fn find_region_containing(maps: &[MemoryRegion], addr: VirtAddr) -> Option<&
     maps.iter().find(|r| addr >= r.start && addr < r.end)
 }
 
+/// An entry from `/proc/[pid]/auxv` (the ELF auxiliary vector).
+#[derive(Debug, Clone, Copy)]
+pub struct AuxvEntry {
+    pub key: u64,
+    pub value: u64,
+}
+
+// Well-known AT_* constants.
+pub const AT_PHDR: u64 = 3;
+pub const AT_PHENT: u64 = 4;
+pub const AT_PHNUM: u64 = 5;
+
+/// Read the ELF auxiliary vector from `/proc/[pid]/auxv`.
+///
+/// Returns a list of (type, value) pairs. Useful for finding
+/// AT_PHDR, AT_PHNUM, etc. to locate program headers at runtime.
+pub fn read_auxv(pid: Pid) -> Result<Vec<AuxvEntry>> {
+    let data = std::fs::read(format!("/proc/{}/auxv", pid))?;
+    let mut entries = Vec::new();
+    for chunk in data.chunks(16) {
+        if chunk.len() < 16 {
+            break;
+        }
+        let key = u64::from_le_bytes(chunk[0..8].try_into().unwrap());
+        let value = u64::from_le_bytes(chunk[8..16].try_into().unwrap());
+        if key == 0 {
+            break; // AT_NULL
+        }
+        entries.push(AuxvEntry { key, value });
+    }
+    Ok(entries)
+}
+
+/// Look up a specific entry in the auxiliary vector.
+pub fn auxv_lookup(entries: &[AuxvEntry], key: u64) -> Option<u64> {
+    entries.iter().find(|e| e.key == key).map(|e| e.value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

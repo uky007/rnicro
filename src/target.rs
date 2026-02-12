@@ -16,6 +16,7 @@ use crate::registers::{self, Registers};
 use crate::types::{ProcessState, StopReason, VirtAddr};
 use crate::unwind::Unwinder;
 use crate::watchpoint::{WatchpointManager, WatchpointType, WatchpointSize, Watchpoint};
+use crate::shared_lib::{self, SharedLibrary};
 
 use nix::sys::signal::Signal;
 use std::collections::{HashMap, HashSet};
@@ -385,6 +386,15 @@ impl Target {
     /// Read the tracee's memory maps from `/proc/pid/maps`.
     pub fn memory_maps(&self) -> Result<Vec<MemoryRegion>> {
         procfs::read_memory_maps(self.process.pid())
+    }
+
+    // ── Shared libraries ─────────────────────────────────────────
+
+    /// List all shared libraries loaded by the tracee.
+    ///
+    /// Reads the dynamic linker's `link_map` via `r_debug`.
+    pub fn shared_libraries(&self) -> Result<Vec<SharedLibrary>> {
+        shared_lib::read_shared_libraries(&self.process)
     }
 
     // ── Disassembly ────────────────────────────────────────────────

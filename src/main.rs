@@ -108,6 +108,7 @@ mod linux {
             "watchpoint" | "watch" | "wp" => cmd_watchpoint(target, args),
             "catchpoint" | "catch" => cmd_catchpoint(target, args),
             "signal" | "sig" => cmd_signal(target, args),
+            "libs" | "sharedlib" => cmd_libs(target),
             "list" | "l" => cmd_list(target),
             "help" | "h" => cmd_help(),
             "quit" | "q" => std::process::exit(0),
@@ -548,6 +549,36 @@ mod linux {
         Ok(())
     }
 
+    fn cmd_libs(target: &mut Target) -> anyhow::Result<()> {
+        match target.shared_libraries() {
+            Ok(libs) => {
+                println!("  {:>18}  {}", "base address".bold(), "library".bold());
+                for lib in &libs {
+                    let display_name = if lib.name.is_empty() {
+                        "<main executable>".dimmed().to_string()
+                    } else {
+                        lib.name.clone()
+                    };
+                    println!(
+                        "  {:018x}  {}",
+                        lib.base_addr, display_name
+                    );
+                }
+                if libs.is_empty() {
+                    println!("  {}", "no shared libraries found (statically linked?)".yellow());
+                }
+            }
+            Err(e) => {
+                println!(
+                    "  {}: {} (try running 'memory maps' as fallback)",
+                    "could not read link_map".yellow(),
+                    e
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn cmd_list(target: &mut Target) -> anyhow::Result<()> {
         if let Ok(Some(loc)) = target.source_location() {
             println!(
@@ -652,6 +683,10 @@ mod linux {
         );
         println!("    signal handle <sig> <act>  set policy (stop|nostop|pass|nopass)");
         println!("    signal list                show all signal policies");
+        println!(
+            "  {} (libs)           list loaded shared libraries",
+            "sharedlib".bold()
+        );
         println!(
             "  {} (l)              show source at current PC",
             "list".bold()
