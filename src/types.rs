@@ -1,3 +1,8 @@
+//! Core types used throughout the crate.
+//!
+//! Defines [`VirtAddr`] for virtual addresses, [`StopReason`] for classifying
+//! why a traced process stopped, and [`ProcessState`] for tracking execution state.
+
 use std::fmt;
 
 /// Virtual address in the running process (post-ASLR).
@@ -8,6 +13,7 @@ use std::fmt;
 pub struct VirtAddr(pub u64);
 
 impl VirtAddr {
+    /// Return the raw `u64` address value.
     pub fn addr(self) -> u64 {
         self.0
     }
