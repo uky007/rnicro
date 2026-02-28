@@ -27,6 +27,7 @@
 //! - [`dwarf_expr`] — DWARF expression evaluator (location expressions).
 //! - [`expr_eval`] — Simple C expression parser and evaluator.
 //! - [`variables`] — Variable and type inspection via DWARF.
+//! - [`rust_type`] — Rust symbol demangling, type detection, and pretty-printing.
 //! - [`unwind`] — Stack unwinding via DWARF Call Frame Information (CFI).
 //! - [`disasm`] — x86_64 disassembly using iced-x86.
 //!
@@ -76,6 +77,7 @@ pub mod dwarf;
 pub mod dwarf_expr;
 pub mod expr_eval;
 pub mod variables;
+pub mod rust_type;
 pub mod unwind;
 pub mod syscall;
 pub mod checksec;

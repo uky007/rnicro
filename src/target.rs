@@ -23,6 +23,7 @@ use crate::rop::{self, Gadget};
 use crate::strings::{self, ExtractedString};
 use crate::types::{ProcessState, StopReason, VirtAddr};
 use crate::unwind::Unwinder;
+use crate::rust_type;
 use crate::variables::{self, Variable, VariableReader};
 use crate::watchpoint::{WatchpointManager, WatchpointType, WatchpointSize, Watchpoint};
 use crate::shared_lib::{self, SharedLibrary};
@@ -338,11 +339,12 @@ impl Target {
             let function = self
                 .elf
                 .find_symbol_at(frame.pc)
-                .map(|s| s.name.clone())
+                .map(|s| rust_type::demangle_symbol(&s.name))
                 .or_else(|| {
                     self.dwarf
                         .as_ref()
                         .and_then(|d| d.find_function(frame.pc).ok().flatten())
+                        .map(|name| rust_type::demangle_symbol(&name))
                 });
             let location = self
                 .dwarf
@@ -729,14 +731,14 @@ impl Target {
         }
     }
 
-    /// Get the function name at the current PC.
+    /// Get the function name at the current PC (demangled).
     pub fn current_function(&self) -> Result<Option<String>> {
         let pc = VirtAddr(self.read_registers()?.pc());
         if let Some(sym) = self.elf.find_symbol_at(pc) {
-            return Ok(Some(sym.name.clone()));
+            return Ok(Some(rust_type::demangle_symbol(&sym.name)));
         }
         if let Some(dwarf) = &self.dwarf {
-            return dwarf.find_function(pc);
+            return Ok(dwarf.find_function(pc)?.map(|n| rust_type::demangle_symbol(&n)));
         }
         Ok(None)
     }
@@ -781,12 +783,15 @@ impl Target {
         let result =
             crate::dwarf_expr::evaluate(&var.location_expr, encoding, &ctx)?;
 
+        let read_mem = |addr: u64, len: usize| self.process.read_memory(VirtAddr(addr), len);
+
         let formatted = match &result {
             crate::dwarf_expr::ExprResult::Address(addr) => {
                 let data = self
                     .process
                     .read_memory(VirtAddr(*addr), var.type_info.byte_size as usize)?;
-                variables::format_value(&data, &var.type_info)
+                rust_type::format_rust_value(&data, &var.type_info, &read_mem)
+                    .unwrap_or_else(|| variables::format_value(&data, &var.type_info))
             }
             crate::dwarf_expr::ExprResult::Register(reg) => {
                 let val = dwarf_regs
@@ -795,11 +800,13 @@ impl Target {
                     .map(|(_, v)| *v)
                     .unwrap_or(0);
                 let data = val.to_le_bytes();
-                variables::format_value(&data, &var.type_info)
+                rust_type::format_rust_value(&data, &var.type_info, &read_mem)
+                    .unwrap_or_else(|| variables::format_value(&data, &var.type_info))
             }
             crate::dwarf_expr::ExprResult::Constant(val) => {
                 let data = val.to_le_bytes();
-                variables::format_value(&data, &var.type_info)
+                rust_type::format_rust_value(&data, &var.type_info, &read_mem)
+                    .unwrap_or_else(|| variables::format_value(&data, &var.type_info))
             }
             crate::dwarf_expr::ExprResult::OptimizedOut => "<optimized out>".into(),
             crate::dwarf_expr::ExprResult::Pieces(_) => "<multi-piece>".into(),
