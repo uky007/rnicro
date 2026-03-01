@@ -31,6 +31,10 @@ mod linux {
         #[arg(short = 'p', long = "attach")]
         attach_pid: Option<i32>,
 
+        /// Run as DAP (Debug Adapter Protocol) server on stdin/stdout
+        #[arg(long)]
+        dap: bool,
+
         /// Arguments to pass to the program
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
@@ -38,6 +42,12 @@ mod linux {
 
     pub fn run() -> anyhow::Result<()> {
         let cli = Cli::parse();
+
+        if cli.dap {
+            let mut dap = rnicro::dap_server::DapServer::new_stdio();
+            dap.run()?;
+            return Ok(());
+        }
 
         let mut target = if let Some(pid) = cli.attach_pid {
             let pid = nix::unistd::Pid::from_raw(pid);

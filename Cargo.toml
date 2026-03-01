@@ -32,6 +32,11 @@ colored = "2"
 rustc-demangle = "0.1"
 cpp_demangle = "0.4"
 
+# Debug Adapter Protocol
+dap = "0.4.1-alpha1"
+serde_json = "1"
+base64 = "0.22"
+
 # Error handling
 anyhow = "1"
 thiserror = "2"

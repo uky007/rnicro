@@ -23,7 +23,7 @@
 //! ## Debug information
 //!
 //! - [`elf`] — ELF binary loading and symbol resolution.
-//! - [`dwarf`] — DWARF debug info parsing (line tables, function names).
+//! - [`dwarf`] — DWARF debug info parsing (line tables, function names, source-to-address resolution).
 //! - [`dwarf_expr`] — DWARF expression evaluator (location expressions).
 //! - [`expr_eval`] — Simple C expression parser and evaluator.
 //! - [`variables`] — Variable and type inspection via DWARF.
@@ -64,6 +64,7 @@
 //! ## Integration
 //!
 //! - [`gdb_rsp`] — GDB Remote Serial Protocol server for external tool integration.
+//! - [`dap_server`] — Debug Adapter Protocol server for editor integration. *(Linux-only)*
 //! - [`tube`] — Process I/O tubes for automated exploit delivery (pwntools-style).
 
 // Platform-independent modules
@@ -115,3 +116,5 @@ pub mod watchpoint;
 pub mod shared_lib;
 #[cfg(target_os = "linux")]
 pub mod target;
+#[cfg(target_os = "linux")]
+pub mod dap_server;
