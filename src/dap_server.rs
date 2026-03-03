@@ -47,10 +47,10 @@
 //! | Category       | Commands                                                    |
 //! |----------------|-------------------------------------------------------------|
 //! | Lifecycle      | initialize, launch, attach, configurationDone, disconnect   |
-//! | Breakpoints    | setBreakpoints, setFunctionBreakpoints, setExceptionBreakpoints |
+//! | Breakpoints    | setBreakpoints, setFunctionBreakpoints, setExceptionBreakpoints, setDataBreakpoints, setInstructionBreakpoints |
 //! | Execution      | continue, next (step over), stepIn, stepOut, pause          |
 //! | Inspection     | threads, stackTrace, scopes, variables, evaluate            |
-//! | Low-level      | disassemble, readMemory                                     |
+//! | Low-level      | disassemble, readMemory, writeMemory                        |
 //!
 //! # Architecture
 //!
@@ -85,6 +85,7 @@ use crate::error::Result;
 use crate::target::Target;
 use crate::types::{StopReason, VirtAddr};
 use crate::variables::{TypeKind, Variable};
+use crate::watchpoint::{WatchpointSize, WatchpointType};
 
 /// DAP server that bridges DAP protocol messages to the rnicro debugger.
 pub struct DapServer<R: Read, W: Write> {
@@ -99,6 +100,14 @@ pub struct DapServer<R: Read, W: Write> {
     next_bp_id: i64,
     /// DWARF info for source line -> address resolution (loaded before launch).
     dwarf: Option<DwarfInfo>,
+    /// Data breakpoints: data_id -> watchpoint_id.
+    data_breakpoints: HashMap<String, u32>,
+    /// Deferred source breakpoints (set before target launch).
+    deferred_source_bps: Vec<DeferredSourceBreakpoint>,
+    /// Deferred function breakpoints (set before target launch).
+    deferred_fn_bps: Vec<DeferredFunctionBreakpoint>,
+    /// Instruction breakpoints (for replace-all semantics).
+    instruction_breakpoints: Vec<VirtAddr>,
 }
 
 /// Describes the content behind a variablesReference.
@@ -109,6 +118,19 @@ enum VariableScope {
     Registers,
     /// Children of a struct/composite variable.
     Children(Vec<(String, String, String)>), // (name, value, type)
+}
+
+/// A source breakpoint deferred until the target is launched.
+struct DeferredSourceBreakpoint {
+    file: String,
+    line: i64,
+    condition: Option<String>,
+}
+
+/// A function breakpoint deferred until the target is launched.
+struct DeferredFunctionBreakpoint {
+    name: String,
+    condition: Option<String>,
 }
 
 impl DapServer<std::io::Stdin, std::io::Stdout> {
@@ -131,6 +153,10 @@ impl<R: Read, W: Write> DapServer<R, W> {
             source_breakpoints: HashMap::new(),
             next_bp_id: 1,
             dwarf: None,
+            data_breakpoints: HashMap::new(),
+            deferred_source_bps: Vec::new(),
+            deferred_fn_bps: Vec::new(),
+            instruction_breakpoints: Vec::new(),
         }
     }
 
@@ -176,6 +202,13 @@ impl<R: Read, W: Write> DapServer<R, W> {
                 Command::Evaluate(args) => self.handle_evaluate(seq, args),
                 Command::Disassemble(args) => self.handle_disassemble(seq, args),
                 Command::ReadMemory(args) => self.handle_read_memory(seq, args),
+                Command::WriteMemory(args) => self.handle_write_memory(seq, args),
+                Command::SetDataBreakpoints(args) => {
+                    self.handle_set_data_breakpoints(seq, args)
+                }
+                Command::SetInstructionBreakpoints(args) => {
+                    self.handle_set_instruction_breakpoints(seq, args)
+                }
                 _ => {
                     self.send_error(seq, "unsupported command");
                     Ok(())
@@ -200,6 +233,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
             supports_disassemble_request: Some(true),
             supports_read_memory_request: Some(true),
             supports_write_memory_request: Some(true),
+            supports_instruction_breakpoints: Some(true),
             supports_evaluate_for_hovers: Some(true),
             exception_breakpoint_filters: Some(vec![
                 ExceptionBreakpointsFilter {
@@ -328,7 +362,68 @@ impl<R: Read, W: Write> DapServer<R, W> {
 
     fn handle_configuration_done(&mut self, seq: i64) -> Result<()> {
         self.send_ok(seq, ResponseBody::ConfigurationDone);
+        self.apply_deferred_breakpoints();
         Ok(())
+    }
+
+    fn apply_deferred_breakpoints(&mut self) {
+        if self.target.is_none() {
+            return;
+        }
+
+        // Apply deferred source breakpoints.
+        let deferred_src: Vec<_> = std::mem::take(&mut self.deferred_source_bps);
+        let mut applied = 0usize;
+        let mut failed = 0usize;
+        for dbp in &deferred_src {
+            let addr = self.resolve_source_line(&dbp.file, dbp.line as u32);
+            if let Some(addr) = addr {
+                if let Some(ref mut target) = self.target {
+                    let result = if let Some(ref cond) = dbp.condition {
+                        target.set_conditional_breakpoint(addr, cond.clone())
+                    } else {
+                        target.set_breakpoint(addr)
+                    };
+                    if result.is_ok() {
+                        self.source_breakpoints
+                            .insert((dbp.file.clone(), dbp.line), addr);
+                        applied += 1;
+                    } else {
+                        failed += 1;
+                    }
+                }
+            } else {
+                failed += 1;
+            }
+        }
+
+        // Apply deferred function breakpoints.
+        let deferred_fn: Vec<_> = std::mem::take(&mut self.deferred_fn_bps);
+        for dfb in &deferred_fn {
+            if let Some(ref mut target) = self.target {
+                if let Some(addr) = target.find_symbol(&dfb.name) {
+                    let result = if let Some(ref cond) = dfb.condition {
+                        target.set_conditional_breakpoint(addr, cond.clone())
+                    } else {
+                        target.set_breakpoint(addr)
+                    };
+                    if result.is_ok() {
+                        applied += 1;
+                    } else {
+                        failed += 1;
+                    }
+                } else {
+                    failed += 1;
+                }
+            }
+        }
+
+        if applied > 0 || failed > 0 {
+            let _ = self.send_output(&format!(
+                "deferred breakpoints: {} applied, {} failed",
+                applied, failed
+            ));
+        }
     }
 
     fn handle_set_breakpoints(
@@ -367,7 +462,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
 
                 if let Some(addr) = addr {
                     let mut verified = false;
-                    let mut bp_id = self.next_bp_id;
+                    let bp_id = self.next_bp_id;
                     self.next_bp_id += 1;
 
                     if let Some(ref mut target) = self.target {
@@ -382,15 +477,37 @@ impl<R: Read, W: Write> DapServer<R, W> {
                                 .insert((source_path.clone(), line), addr);
                         }
                     } else {
-                        // No target yet; store for later.
-                        self.source_breakpoints
-                            .insert((source_path.clone(), line), addr);
-                        verified = true;
+                        // No target yet; defer for later application.
+                        self.deferred_source_bps.push(DeferredSourceBreakpoint {
+                            file: source_path.clone(),
+                            line,
+                            condition: src_bp.condition.clone(),
+                        });
                     }
 
                     result_bps.push(Breakpoint {
                         id: Some(bp_id),
                         verified,
+                        source: Some(Source {
+                            path: Some(source_path.clone()),
+                            ..Default::default()
+                        }),
+                        line: Some(line),
+                        ..Default::default()
+                    });
+                } else if self.target.is_none() {
+                    // No DWARF resolution possible yet; defer entirely.
+                    let bp_id = self.next_bp_id;
+                    self.next_bp_id += 1;
+                    self.deferred_source_bps.push(DeferredSourceBreakpoint {
+                        file: source_path.clone(),
+                        line,
+                        condition: src_bp.condition.clone(),
+                    });
+                    result_bps.push(Breakpoint {
+                        id: Some(bp_id),
+                        verified: false,
+                        message: Some("deferred until target launch".into()),
                         source: Some(Source {
                             path: Some(source_path.clone()),
                             ..Default::default()
@@ -452,10 +569,15 @@ impl<R: Read, W: Write> DapServer<R, W> {
                     });
                 }
             } else {
+                // No target yet; defer for later application.
+                self.deferred_fn_bps.push(DeferredFunctionBreakpoint {
+                    name: fb.name.clone(),
+                    condition: fb.condition.clone(),
+                });
                 result_bps.push(Breakpoint {
                     id: Some(bp_id),
                     verified: false,
-                    message: Some("no active debug target".into()),
+                    message: Some("deferred until target launch".into()),
                     ..Default::default()
                 });
             }
@@ -911,6 +1033,194 @@ impl<R: Read, W: Write> DapServer<R, W> {
         Ok(())
     }
 
+    fn handle_write_memory(
+        &mut self,
+        seq: i64,
+        args: &dap::requests::WriteMemoryArguments,
+    ) -> Result<()> {
+        let target = match self.target.as_ref() {
+            Some(t) => t,
+            None => {
+                self.send_error(seq, "no active debug target");
+                return Ok(());
+            }
+        };
+
+        let addr = parse_address(&args.memory_reference);
+        let offset = args.offset.unwrap_or(0) as i64;
+        let start = if offset >= 0 {
+            addr + offset as u64
+        } else {
+            addr.saturating_sub((-offset) as u64)
+        };
+
+        use base64::Engine;
+        let decoded = match base64::engine::general_purpose::STANDARD.decode(&args.data) {
+            Ok(d) => d,
+            Err(e) => {
+                self.send_error(seq, &format!("base64 decode failed: {}", e));
+                return Ok(());
+            }
+        };
+
+        match target.write_memory(VirtAddr(start), &decoded) {
+            Ok(()) => {
+                self.send_ok(
+                    seq,
+                    ResponseBody::WriteMemory(dap::responses::WriteMemoryResponse {
+                        offset: None,
+                        bytes_written: Some(decoded.len() as i64),
+                    }),
+                );
+            }
+            Err(e) => {
+                self.send_error(seq, &format!("write memory failed: {}", e));
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_set_data_breakpoints(
+        &mut self,
+        seq: i64,
+        args: &dap::requests::SetDataBreakpointsArguments,
+    ) -> Result<()> {
+        // Remove all existing data breakpoints.
+        if let Some(ref mut target) = self.target {
+            for (_data_id, wp_id) in self.data_breakpoints.drain() {
+                let _ = target.remove_watchpoint(wp_id);
+            }
+        } else {
+            self.data_breakpoints.clear();
+        }
+
+        let mut result_bps = Vec::new();
+
+        for dbp in &args.breakpoints {
+            let bp_id = self.next_bp_id;
+            self.next_bp_id += 1;
+
+            if let Some(ref mut target) = self.target {
+                let addr = parse_address(&dbp.data_id);
+                let wp_type = match dbp.access_type {
+                    Some(dap::types::DataBreakpointAccessType::Write) => WatchpointType::Write,
+                    Some(dap::types::DataBreakpointAccessType::Read) => WatchpointType::ReadWrite,
+                    Some(dap::types::DataBreakpointAccessType::ReadWrite) => {
+                        WatchpointType::ReadWrite
+                    }
+                    None => WatchpointType::Write,
+                };
+
+                match target.set_watchpoint(VirtAddr(addr), wp_type, WatchpointSize::Byte8) {
+                    Ok(wp_id) => {
+                        self.data_breakpoints.insert(dbp.data_id.clone(), wp_id);
+                        result_bps.push(Breakpoint {
+                            id: Some(bp_id),
+                            verified: true,
+                            ..Default::default()
+                        });
+                    }
+                    Err(_) => {
+                        result_bps.push(Breakpoint {
+                            id: Some(bp_id),
+                            verified: false,
+                            message: Some("failed to set data breakpoint".into()),
+                            ..Default::default()
+                        });
+                    }
+                }
+            } else {
+                result_bps.push(Breakpoint {
+                    id: Some(bp_id),
+                    verified: false,
+                    message: Some("no active debug target".into()),
+                    ..Default::default()
+                });
+            }
+        }
+
+        self.send_ok(
+            seq,
+            ResponseBody::SetDataBreakpoints(dap::responses::SetDataBreakpointsResponse {
+                breakpoints: result_bps,
+            }),
+        );
+        Ok(())
+    }
+
+    fn handle_set_instruction_breakpoints(
+        &mut self,
+        seq: i64,
+        args: &dap::requests::SetInstructionBreakpointsArguments,
+    ) -> Result<()> {
+        // Remove all existing instruction breakpoints.
+        if let Some(ref mut target) = self.target {
+            for addr in self.instruction_breakpoints.drain(..) {
+                let _ = target.remove_breakpoint(addr);
+            }
+        } else {
+            self.instruction_breakpoints.clear();
+        }
+
+        let mut result_bps = Vec::new();
+
+        for ib in &args.breakpoints {
+            let bp_id = self.next_bp_id;
+            self.next_bp_id += 1;
+
+            if let Some(ref mut target) = self.target {
+                let addr = parse_address(&ib.instruction_reference);
+                let offset = ib.offset.unwrap_or(0);
+                let start = if offset >= 0 {
+                    addr + offset as u64
+                } else {
+                    addr.saturating_sub((-offset) as u64)
+                };
+                let target_addr = VirtAddr(start);
+
+                let set_result = if let Some(ref cond) = ib.condition {
+                    target.set_conditional_breakpoint(target_addr, cond.clone())
+                } else {
+                    target.set_breakpoint(target_addr)
+                };
+
+                if set_result.is_ok() {
+                    self.instruction_breakpoints.push(target_addr);
+                    result_bps.push(Breakpoint {
+                        id: Some(bp_id),
+                        verified: true,
+                        instruction_reference: Some(format!("0x{:x}", start)),
+                        ..Default::default()
+                    });
+                } else {
+                    result_bps.push(Breakpoint {
+                        id: Some(bp_id),
+                        verified: false,
+                        message: Some("failed to set instruction breakpoint".into()),
+                        ..Default::default()
+                    });
+                }
+            } else {
+                result_bps.push(Breakpoint {
+                    id: Some(bp_id),
+                    verified: false,
+                    message: Some("no active debug target".into()),
+                    ..Default::default()
+                });
+            }
+        }
+
+        self.send_ok(
+            seq,
+            ResponseBody::SetInstructionBreakpoints(
+                dap::responses::SetInstructionBreakpointsResponse {
+                    breakpoints: result_bps,
+                },
+            ),
+        );
+        Ok(())
+    }
+
     // ── Stop reason mapping ───────────────────────────────────────────
 
     fn handle_stop_reason(&mut self, reason: &StopReason) {
@@ -1292,6 +1602,7 @@ mod tests {
         assert_eq!(caps.supports_disassemble_request, Some(true));
         assert_eq!(caps.supports_read_memory_request, Some(true));
         assert_eq!(caps.supports_write_memory_request, Some(true));
+        assert_eq!(caps.supports_instruction_breakpoints, Some(true));
         assert_eq!(caps.supports_evaluate_for_hovers, Some(true));
 
         let filters = caps.exception_breakpoint_filters.unwrap();
@@ -1402,5 +1713,126 @@ mod tests {
         assert_eq!(r1, 1);
         assert_eq!(r2, 2);
         assert_eq!(server.next_var_ref, 3);
+    }
+
+    #[test]
+    fn write_memory_address_offset_calculation() {
+        // Positive offset.
+        let addr = parse_address("0x1000");
+        let offset: i64 = 0x10;
+        let start = addr + offset as u64;
+        assert_eq!(start, 0x1010);
+
+        // Negative offset.
+        let offset: i64 = -0x10;
+        let start = addr.saturating_sub((-offset) as u64);
+        assert_eq!(start, 0x0FF0);
+
+        // Base64 decode round-trip.
+        use base64::Engine;
+        let data = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&encoded)
+            .unwrap();
+        assert_eq!(data, decoded);
+    }
+
+    #[test]
+    fn data_breakpoint_access_type_mapping() {
+        use dap::types::DataBreakpointAccessType;
+
+        // DAP Write -> WatchpointType::Write
+        let wp = match DataBreakpointAccessType::Write {
+            DataBreakpointAccessType::Write => WatchpointType::Write,
+            DataBreakpointAccessType::Read => WatchpointType::ReadWrite,
+            DataBreakpointAccessType::ReadWrite => WatchpointType::ReadWrite,
+        };
+        assert!(matches!(wp, WatchpointType::Write));
+
+        // DAP Read -> WatchpointType::ReadWrite (x86_64 only supports RW, not R-only)
+        let wp = match DataBreakpointAccessType::Read {
+            DataBreakpointAccessType::Write => WatchpointType::Write,
+            DataBreakpointAccessType::Read => WatchpointType::ReadWrite,
+            DataBreakpointAccessType::ReadWrite => WatchpointType::ReadWrite,
+        };
+        assert!(matches!(wp, WatchpointType::ReadWrite));
+
+        // DAP ReadWrite -> WatchpointType::ReadWrite
+        let wp = match DataBreakpointAccessType::ReadWrite {
+            DataBreakpointAccessType::Write => WatchpointType::Write,
+            DataBreakpointAccessType::Read => WatchpointType::ReadWrite,
+            DataBreakpointAccessType::ReadWrite => WatchpointType::ReadWrite,
+        };
+        assert!(matches!(wp, WatchpointType::ReadWrite));
+    }
+
+    #[test]
+    fn instruction_breakpoint_offset_calculation() {
+        // No offset.
+        let addr = parse_address("0x401000");
+        let offset: i64 = 0;
+        let start = addr + offset as u64;
+        assert_eq!(start, 0x401000);
+
+        // Positive offset.
+        let addr = parse_address("0x401000");
+        let offset: i64 = 5;
+        let start = addr + offset as u64;
+        assert_eq!(start, 0x401005);
+
+        // Negative offset.
+        let addr = parse_address("0x401000");
+        let offset: i64 = -16;
+        let start = addr.saturating_sub((-offset) as u64);
+        assert_eq!(start, 0x400FF0);
+    }
+
+    #[test]
+    fn deferred_breakpoints_stored_when_no_target() {
+        let input = BufReader::new(std::io::empty());
+        let output = BufWriter::new(std::io::sink());
+        let mut server = DapServer::new(input, output);
+
+        // No target set, so breakpoints should be deferred.
+        assert!(server.target.is_none());
+
+        server.deferred_source_bps.push(DeferredSourceBreakpoint {
+            file: "/src/main.rs".into(),
+            line: 42,
+            condition: None,
+        });
+        server.deferred_source_bps.push(DeferredSourceBreakpoint {
+            file: "/src/main.rs".into(),
+            line: 100,
+            condition: Some("x > 5".into()),
+        });
+        server.deferred_fn_bps.push(DeferredFunctionBreakpoint {
+            name: "main".into(),
+            condition: None,
+        });
+
+        assert_eq!(server.deferred_source_bps.len(), 2);
+        assert_eq!(server.deferred_source_bps[0].line, 42);
+        assert!(server.deferred_source_bps[0].condition.is_none());
+        assert_eq!(server.deferred_source_bps[1].line, 100);
+        assert_eq!(
+            server.deferred_source_bps[1].condition.as_deref(),
+            Some("x > 5")
+        );
+        assert_eq!(server.deferred_fn_bps.len(), 1);
+        assert_eq!(server.deferred_fn_bps[0].name, "main");
+    }
+
+    #[test]
+    fn new_fields_initialized_empty() {
+        let input = BufReader::new(std::io::empty());
+        let output = BufWriter::new(std::io::sink());
+        let server = DapServer::new(input, output);
+
+        assert!(server.data_breakpoints.is_empty());
+        assert!(server.deferred_source_bps.is_empty());
+        assert!(server.deferred_fn_bps.is_empty());
+        assert!(server.instruction_breakpoints.is_empty());
     }
 }

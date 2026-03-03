@@ -62,23 +62,26 @@ Create `.vscode/launch.json` in your project:
 
 ## Supported Features
 
-| Feature                  | Status |
-|--------------------------|--------|
-| Source breakpoints       | Yes    |
-| Conditional breakpoints  | Yes    |
-| Function breakpoints     | Yes    |
-| Exception breakpoints    | Yes (signals: all, SIGSEGV, SIGABRT) |
-| Step over / into / out   | Yes    |
-| Continue / Pause         | Yes    |
-| Stack traces             | Yes    |
-| Local variables          | Yes    |
-| Register view            | Yes    |
-| Hover evaluation         | Yes    |
-| Disassembly view         | Yes    |
-| Memory read              | Yes    |
+| Feature                    | Status |
+|----------------------------|--------|
+| Source breakpoints         | Yes    |
+| Conditional breakpoints    | Yes    |
+| Function breakpoints       | Yes    |
+| Exception breakpoints      | Yes (signals: all, SIGSEGV, SIGABRT) |
+| Data breakpoints           | Yes (hardware watchpoints) |
+| Instruction breakpoints    | Yes (breakpoint by address) |
+| Deferred breakpoints       | Yes (set before launch, applied on configurationDone) |
+| Step over / into / out     | Yes    |
+| Continue / Pause           | Yes    |
+| Stack traces               | Yes    |
+| Local variables            | Yes    |
+| Register view              | Yes    |
+| Hover evaluation           | Yes    |
+| Disassembly view           | Yes    |
+| Memory read                | Yes    |
+| Memory write               | Yes    |
 
 ## Limitations
 
 - Linux x86_64 only (ptrace-based debugger)
 - Single-thread stepping (multi-thread support planned)
-- Data breakpoints (watchpoints) declared but handler not yet wired
