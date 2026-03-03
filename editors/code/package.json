@@ -1,0 +1,139 @@
+{
+  "name": "rnicro",
+  "displayName": "rnicro Debugger",
+  "description": "Debug adapter for rnicro, a Linux x86_64 debugger and exploit development toolkit",
+  "version": "0.1.0",
+  "publisher": "rnicro",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Debuggers"
+  ],
+  "activationEvents": [
+    "onDebugResolve:rnicro",
+    "onCommand:rnicro.pickProcess"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "rnicro Debugger",
+      "properties": {
+        "rnicro.path": {
+          "type": "string",
+          "default": "rnicro",
+          "description": "Path to the rnicro binary. Defaults to 'rnicro' (looked up in PATH)."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "rnicro.pickProcess",
+        "title": "rnicro: Pick Process to Attach"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "rnicro",
+        "languages": [
+          "rust",
+          "c",
+          "cpp"
+        ],
+        "label": "rnicro",
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Path to the executable to debug.",
+                "default": "${workspaceFolder}/target/debug/${workspaceFolderBasename}"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Arguments to pass to the program.",
+                "default": []
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory for the program.",
+                "default": "${workspaceFolder}"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Automatically stop after launch.",
+                "default": true
+              }
+            }
+          },
+          "attach": {
+            "required": [
+              "pid"
+            ],
+            "properties": {
+              "pid": {
+                "type": [
+                  "number",
+                  "string"
+                ],
+                "description": "Process ID to attach to. Use \"${command:rnicro.pickProcess}\" for a process picker.",
+                "default": "${command:rnicro.pickProcess}"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "rnicro",
+            "request": "launch",
+            "name": "rnicro: Launch",
+            "program": "${workspaceFolder}/target/debug/${workspaceFolderBasename}",
+            "args": [],
+            "stopOnEntry": true
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "rnicro: Launch Program",
+            "description": "Launch and debug an executable with rnicro.",
+            "body": {
+              "type": "rnicro",
+              "request": "launch",
+              "name": "rnicro: Launch ${1:program}",
+              "program": "^\"\\${workspaceFolder}/target/debug/${2:myapp}\"",
+              "args": [],
+              "stopOnEntry": true
+            }
+          },
+          {
+            "label": "rnicro: Attach to Process",
+            "description": "Attach rnicro to a running process.",
+            "body": {
+              "type": "rnicro",
+              "request": "attach",
+              "name": "rnicro: Attach",
+              "pid": "^\"\\${command:rnicro.pickProcess}\""
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.130",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0"
+  }
+}

@@ -16,17 +16,31 @@
 //! rnicro --dap
 //! ```
 //!
-//! Then configure your editor to use it as a debug adapter. For VS Code,
-//! add to `.vscode/launch.json`:
+//! ## VS Code
+//!
+//! Install the rnicro VS Code extension from `editors/code/`.
+//! The extension registers rnicro as a debug adapter and provides
+//! launch.json schema validation, IntelliSense snippets, and a
+//! process picker for attach mode.
+//!
+//! Example `.vscode/launch.json`:
 //!
 //! ```json
 //! {
 //!     "type": "rnicro",
 //!     "request": "launch",
+//!     "name": "rnicro: Launch",
 //!     "program": "${workspaceFolder}/target/debug/myapp",
-//!     "args": []
+//!     "args": [],
+//!     "stopOnEntry": true
 //! }
 //! ```
+//!
+//! ## Other editors
+//!
+//! Any editor supporting DAP can use `rnicro --dap` as a debug adapter
+//! executable (stdin/stdout transport). See the DAP specification for
+//! editor-specific configuration (e.g., nvim-dap, Emacs dap-mode).
 //!
 //! # Supported DAP commands
 //!
