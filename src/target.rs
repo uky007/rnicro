@@ -234,10 +234,11 @@ impl Target {
                     if !already_has_bp {
                         self.set_breakpoint(return_pc)?;
                     }
-                    let reason = self.resume()?;
+                    let result = self.resume();
                     if !already_has_bp {
                         let _ = self.remove_breakpoint(return_pc);
                     }
+                    let reason = result?;
 
                     match &reason {
                         StopReason::BreakpointHit { addr } if *addr == return_pc => {
@@ -304,12 +305,12 @@ impl Target {
         if !already_has_bp {
             self.set_breakpoint(ret_addr)?;
         }
-        let reason = self.resume()?;
+        let result = self.resume();
         if !already_has_bp {
             let _ = self.remove_breakpoint(ret_addr);
         }
 
-        Ok(reason)
+        Ok(result?)
     }
 
     // ── Stack unwinding ────────────────────────────────────────────

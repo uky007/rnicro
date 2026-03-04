@@ -1262,6 +1262,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
                     exit_code: *code as i64,
                 }));
                 let _ = self.server.send_event(Event::Terminated(None));
+                self.target = None;
             }
             StopReason::Terminated(sig) => {
                 let _ = self
@@ -1269,6 +1270,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
                     .send_event(Event::Exited(ExitedEventBody { exit_code: -1 }));
                 let _ = self.send_output(&format!("terminated by signal: {}", sig));
                 let _ = self.server.send_event(Event::Terminated(None));
+                self.target = None;
             }
             StopReason::ThreadCreated(tid) => {
                 let _ = self.server.send_event(Event::Thread(ThreadEventBody {

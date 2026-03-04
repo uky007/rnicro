@@ -263,6 +263,7 @@ impl Process {
     /// Uses `waitpid(-1, __WALL)` to catch events from any thread.
     /// Updates `current_tid` to the thread that stopped.
     pub fn wait_on_signal(&mut self) -> Result<StopReason> {
+        loop {
         let status = waitpid(
             Pid::from_raw(-1),
             Some(WaitPidFlag::__WALL),
@@ -345,15 +346,14 @@ impl Process {
                     StopReason::SingleStep
                 }
             }
-            other => {
-                return Err(Error::Process(format!(
-                    "unexpected wait status: {:?}",
-                    other
-                )));
+            WaitStatus::Continued(_) | WaitStatus::StillAlive => {
+                // Process is still running; re-wait.
+                continue;
             }
         };
 
-        Ok(reason)
+        return Ok(reason);
+        } // loop
     }
 
     /// Read a word (8 bytes) from the tracee's memory.
