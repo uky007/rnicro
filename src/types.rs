@@ -77,6 +77,8 @@ pub enum StopReason {
     Terminated(nix::sys::signal::Signal),
     /// A new thread was created (clone event).
     ThreadCreated(nix::unistd::Pid),
+    /// A non-main thread exited.
+    ThreadExited(nix::unistd::Pid),
 }
 
 /// Process execution state.

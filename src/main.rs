@@ -1836,6 +1836,9 @@ mod linux {
             StopReason::ThreadCreated(pid) => {
                 println!("  new thread created: {}", pid);
             }
+            StopReason::ThreadExited(tid) => {
+                println!("  thread {} exited", tid);
+            }
         }
     }
 

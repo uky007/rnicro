@@ -655,20 +655,22 @@ impl<R: Read, W: Write> DapServer<R, W> {
     fn handle_continue(
         &mut self,
         seq: i64,
-        _args: &dap::requests::ContinueArguments,
+        args: &dap::requests::ContinueArguments,
     ) -> Result<()> {
-        let target = match self.target.as_mut() {
-            Some(t) => t,
-            None => {
-                self.send_error(seq, "no active debug target");
-                return Ok(());
-            }
-        };
+        if self.target.is_none() {
+            self.send_error(seq, "no active debug target");
+            return Ok(());
+        }
+
+        if let Err(e) = self.switch_to_thread(args.thread_id) {
+            self.send_error(seq, &e);
+            return Ok(());
+        }
 
         self.variable_refs.clear();
         self.next_var_ref = 1;
 
-        match target.resume() {
+        match self.target.as_mut().unwrap().resume() {
             Ok(reason) => {
                 self.send_ok(
                     seq,
@@ -688,39 +690,42 @@ impl<R: Read, W: Write> DapServer<R, W> {
     fn handle_next(
         &mut self,
         seq: i64,
-        _args: &dap::requests::NextArguments,
+        args: &dap::requests::NextArguments,
     ) -> Result<()> {
-        self.do_step(seq, "next")
+        self.do_step(seq, "next", args.thread_id)
     }
 
     fn handle_step_in(
         &mut self,
         seq: i64,
-        _args: &dap::requests::StepInArguments,
+        args: &dap::requests::StepInArguments,
     ) -> Result<()> {
-        self.do_step(seq, "stepIn")
+        self.do_step(seq, "stepIn", args.thread_id)
     }
 
     fn handle_step_out(
         &mut self,
         seq: i64,
-        _args: &dap::requests::StepOutArguments,
+        args: &dap::requests::StepOutArguments,
     ) -> Result<()> {
-        self.do_step(seq, "stepOut")
+        self.do_step(seq, "stepOut", args.thread_id)
     }
 
-    fn do_step(&mut self, seq: i64, kind: &str) -> Result<()> {
-        let target = match self.target.as_mut() {
-            Some(t) => t,
-            None => {
-                self.send_error(seq, "no active debug target");
-                return Ok(());
-            }
-        };
+    fn do_step(&mut self, seq: i64, kind: &str, thread_id: i64) -> Result<()> {
+        if self.target.is_none() {
+            self.send_error(seq, "no active debug target");
+            return Ok(());
+        }
+
+        if let Err(e) = self.switch_to_thread(thread_id) {
+            self.send_error(seq, &e);
+            return Ok(());
+        }
 
         self.variable_refs.clear();
         self.next_var_ref = 1;
 
+        let target = self.target.as_mut().unwrap();
         let result = match kind {
             "next" => target.step_over(),
             "stepIn" => target.step_in(),
@@ -749,11 +754,12 @@ impl<R: Read, W: Write> DapServer<R, W> {
     fn handle_pause(
         &mut self,
         seq: i64,
-        _args: &dap::requests::PauseArguments,
+        args: &dap::requests::PauseArguments,
     ) -> Result<()> {
-        if let Some(ref target) = self.target {
+        if self.target.is_some() {
             use nix::sys::signal;
-            let _ = signal::kill(target.pid(), signal::Signal::SIGSTOP);
+            let tid = Pid::from_raw(args.thread_id as i32);
+            let _ = signal::kill(tid, signal::Signal::SIGSTOP);
             self.send_ok(seq, ResponseBody::Pause);
         } else {
             self.send_error(seq, "no active debug target");
@@ -785,17 +791,19 @@ impl<R: Read, W: Write> DapServer<R, W> {
     fn handle_stack_trace(
         &mut self,
         seq: i64,
-        _args: &dap::requests::StackTraceArguments,
+        args: &dap::requests::StackTraceArguments,
     ) -> Result<()> {
-        let target = match self.target.as_ref() {
-            Some(t) => t,
-            None => {
-                self.send_error(seq, "no active debug target");
-                return Ok(());
-            }
-        };
+        if self.target.is_none() {
+            self.send_error(seq, "no active debug target");
+            return Ok(());
+        }
 
-        match target.backtrace() {
+        if let Err(e) = self.switch_to_thread(args.thread_id) {
+            self.send_error(seq, &e);
+            return Ok(());
+        }
+
+        match self.target.as_ref().unwrap().backtrace() {
             Ok(frames) => {
                 let stack_frames: Vec<StackFrame> = frames
                     .iter()
@@ -1268,6 +1276,12 @@ impl<R: Read, W: Write> DapServer<R, W> {
                     thread_id: tid.as_raw() as i64,
                 }));
             }
+            StopReason::ThreadExited(tid) => {
+                let _ = self.server.send_event(Event::Thread(ThreadEventBody {
+                    reason: dap::types::ThreadEventReason::Exited,
+                    thread_id: tid.as_raw() as i64,
+                }));
+            }
         }
     }
 
@@ -1386,6 +1400,19 @@ impl<R: Read, W: Write> DapServer<R, W> {
             }
             _ => 0,
         }
+    }
+
+    // ── Thread switching ───────────────────────────────────────────────
+
+    fn switch_to_thread(&mut self, thread_id: i64) -> std::result::Result<(), String> {
+        let target = self
+            .target
+            .as_mut()
+            .ok_or_else(|| "no active debug target".to_string())?;
+        let tid = Pid::from_raw(thread_id as i32);
+        target
+            .switch_thread(tid)
+            .map_err(|e| format!("switch_thread: {}", e))
     }
 
     // ── Source line resolution ─────────────────────────────────────────
@@ -1527,6 +1554,7 @@ pub fn stop_reason_to_stopped_reason(reason: &StopReason) -> &'static str {
         StopReason::Exited(_) => "exited",
         StopReason::Terminated(_) => "terminated",
         StopReason::ThreadCreated(_) => "thread",
+        StopReason::ThreadExited(_) => "thread",
     }
 }
 
@@ -1590,6 +1618,24 @@ mod tests {
             )),
             "thread"
         );
+        assert_eq!(
+            stop_reason_to_stopped_reason(&StopReason::ThreadExited(
+                nix::unistd::Pid::from_raw(1234)
+            )),
+            "thread"
+        );
+    }
+
+    #[test]
+    fn switch_to_thread_no_target() {
+        let input = BufReader::new(std::io::empty());
+        let output = BufWriter::new(std::io::sink());
+        let mut server = DapServer::new(input, output);
+
+        assert!(server.target.is_none());
+        let result = server.switch_to_thread(1234);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no active debug target"));
     }
 
     #[test]

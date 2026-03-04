@@ -296,16 +296,20 @@ impl Process {
                     // Main thread exited
                     self.state = ProcessState::Exited;
                     self.is_attached = false;
+                    StopReason::Exited(code)
+                } else {
+                    StopReason::ThreadExited(tid)
                 }
-                StopReason::Exited(code)
             }
             WaitStatus::Signaled(tid, sig, _) => {
                 self.threads.retain(|&t| t != tid);
                 if tid == self.pid {
                     self.state = ProcessState::Terminated;
                     self.is_attached = false;
+                    StopReason::Terminated(sig)
+                } else {
+                    StopReason::ThreadExited(tid)
                 }
-                StopReason::Terminated(sig)
             }
             WaitStatus::PtraceSyscall(_) => {
                 self.state = ProcessState::Stopped;
