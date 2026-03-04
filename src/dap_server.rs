@@ -79,6 +79,8 @@ use dap::types::{
     Source, StackFrame, Thread,
 };
 
+use crate::antidebug;
+use crate::checksec::{self, ChecksecResult, SecurityStatus};
 use crate::disasm::DisasmStyle;
 use crate::dwarf::DwarfInfo;
 use crate::error::Result;
@@ -315,6 +317,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
         match Target::launch(path, &args_ref) {
             Ok(target) => {
                 self.target = Some(target);
+                self.run_security_analysis();
                 self.send_ok(seq, ResponseBody::Launch);
                 self.send_stopped("entry", None);
             }
@@ -350,6 +353,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
                 let exe = target.program_path().to_string();
                 self.dwarf = DwarfInfo::load(Path::new(&exe)).ok();
                 self.target = Some(target);
+                self.run_security_analysis();
                 self.send_ok(seq, ResponseBody::Attach);
                 self.send_stopped("entry", None);
             }
@@ -1417,6 +1421,25 @@ impl<R: Read, W: Write> DapServer<R, W> {
             .map_err(|e| format!("switch_thread: {}", e))
     }
 
+    // ── Security analysis ──────────────────────────────────────────────
+
+    fn run_security_analysis(&mut self) {
+        let path = match self.target.as_ref() {
+            Some(t) => t.program_path().to_string(),
+            None => return,
+        };
+
+        if let Ok(result) = checksec::checksec(Path::new(&path)) {
+            let _ = self.send_output(&format_checksec(&result, &path));
+        }
+
+        if let Ok(findings) = antidebug::scan(Path::new(&path)) {
+            if !findings.is_empty() {
+                let _ = self.send_output(&format_antidebug(&findings));
+            }
+        }
+    }
+
     // ── Source line resolution ─────────────────────────────────────────
 
     fn resolve_source_line(&self, file: &str, line: u32) -> Option<VirtAddr> {
@@ -1558,6 +1581,42 @@ pub fn stop_reason_to_stopped_reason(reason: &StopReason) -> &'static str {
         StopReason::ThreadCreated(_) => "thread",
         StopReason::ThreadExited(_) => "thread",
     }
+}
+
+/// Format checksec results for DAP output.
+fn format_checksec(result: &ChecksecResult, path: &str) -> String {
+    let yn = |b: bool| if b { "Yes" } else { "No" };
+    format!(
+        "[Security] checksec: {}\n\
+         \x20 RELRO:    {}\n\
+         \x20 Canary:   {}\n\
+         \x20 NX:       {}\n\
+         \x20 PIE:      {}\n\
+         \x20 Fortify:  {}\n\
+         \x20 RPATH:    {}\n\
+         \x20 RUNPATH:  {}",
+        path,
+        result.relro,
+        yn(result.canary),
+        yn(result.nx),
+        yn(result.pie),
+        yn(result.fortify),
+        yn(result.rpath),
+        yn(result.runpath),
+    )
+}
+
+/// Format anti-debug findings for DAP output.
+fn format_antidebug(findings: &[antidebug::AntiDebugFinding]) -> String {
+    let mut out = format!("[Security] anti-debug techniques detected ({}):", findings.len());
+    for f in findings {
+        if f.addr != 0 {
+            out.push_str(&format!("\n  {} at 0x{:x}: {}", f.technique, f.addr, f.description));
+        } else {
+            out.push_str(&format!("\n  {}: {}", f.technique, f.description));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1882,5 +1941,67 @@ mod tests {
         assert!(server.deferred_source_bps.is_empty());
         assert!(server.deferred_fn_bps.is_empty());
         assert!(server.instruction_breakpoints.is_empty());
+    }
+
+    #[test]
+    fn format_checksec_output() {
+        let result = ChecksecResult {
+            relro: SecurityStatus::Full,
+            canary: true,
+            nx: true,
+            pie: true,
+            fortify: false,
+            rpath: false,
+            runpath: false,
+        };
+        let output = format_checksec(&result, "/usr/bin/test");
+        assert!(output.starts_with("[Security] checksec: /usr/bin/test"));
+        assert!(output.contains("RELRO:    Full"));
+        assert!(output.contains("Canary:   Yes"));
+        assert!(output.contains("NX:       Yes"));
+        assert!(output.contains("PIE:      Yes"));
+        assert!(output.contains("Fortify:  No"));
+        assert!(output.contains("RPATH:    No"));
+        assert!(output.contains("RUNPATH:  No"));
+    }
+
+    #[test]
+    fn format_checksec_partial_relro() {
+        let result = ChecksecResult {
+            relro: SecurityStatus::Partial,
+            canary: false,
+            nx: false,
+            pie: false,
+            fortify: false,
+            rpath: true,
+            runpath: true,
+        };
+        let output = format_checksec(&result, "/tmp/vuln");
+        assert!(output.contains("RELRO:    Partial"));
+        assert!(output.contains("Canary:   No"));
+        assert!(output.contains("RPATH:    Yes"));
+        assert!(output.contains("RUNPATH:  Yes"));
+    }
+
+    #[test]
+    fn format_antidebug_output() {
+        let findings = vec![
+            antidebug::AntiDebugFinding {
+                technique: antidebug::AntiDebugTechnique::PtraceTraceme,
+                addr: 0x401234,
+                description: "ptrace(TRACEME) call detected".into(),
+            },
+            antidebug::AntiDebugFinding {
+                technique: antidebug::AntiDebugTechnique::TimingCheck,
+                addr: 0,
+                description: "clock_gettime import found".into(),
+            },
+        ];
+        let output = format_antidebug(&findings);
+        assert!(output.starts_with("[Security] anti-debug techniques detected (2):"));
+        assert!(output.contains("ptrace(TRACEME) at 0x401234:"));
+        assert!(output.contains("timing check: clock_gettime import found"));
+        // addr=0 should not show "at 0x0"
+        assert!(!output.contains("at 0x0"));
     }
 }
