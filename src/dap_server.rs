@@ -86,7 +86,8 @@ use crate::dwarf::DwarfInfo;
 use crate::error::Result;
 use crate::target::Target;
 use crate::types::{StopReason, VirtAddr};
-use crate::variables::{TypeKind, Variable};
+use crate::rust_type;
+use crate::variables::{self, TypeKind, Variable};
 use crate::watchpoint::{WatchpointSize, WatchpointType};
 
 /// DAP server that bridges DAP protocol messages to the rnicro debugger.
@@ -1310,16 +1311,42 @@ impl<R: Read, W: Write> DapServer<R, W> {
             Err(_) => return vec![],
         };
 
-        let mut result = Vec::new();
-        for var in vars {
-            let formatted = target
-                .read_variable(&var.name)
-                .ok()
-                .flatten()
-                .map(|(_, f)| f)
-                .unwrap_or_else(|| "<unavailable>".into());
+        // Collect variable data first (borrows target immutably),
+        // then create child refs (borrows self mutably).
+        let var_data: Vec<_> = vars
+            .into_iter()
+            .map(|var| {
+                let data_result = target.read_variable_data(&var.name);
+                match data_result {
+                    Ok(Some((_, data))) => {
+                        let read_mem = |addr: u64, len: usize| {
+                            target.read_memory(VirtAddr(addr), len)
+                        };
+                        let formatted =
+                            rust_type::format_rust_value(&data, &var.type_info, &read_mem)
+                                .unwrap_or_else(|| variables::format_value(&data, &var.type_info));
+                        (var, formatted, Some(data))
+                    }
+                    _ => {
+                        // Fall back to read_variable for formatted string
+                        let formatted = target
+                            .read_variable(&var.name)
+                            .ok()
+                            .flatten()
+                            .map(|(_, f)| f)
+                            .unwrap_or_else(|| "<unavailable>".into());
+                        (var, formatted, None)
+                    }
+                }
+            })
+            .collect();
 
-            let child_ref = self.maybe_create_child_ref(&var);
+        let mut result = Vec::new();
+        for (var, formatted, data) in var_data {
+            let child_ref = match data {
+                Some(ref d) => self.maybe_create_child_ref(&var, d),
+                None => self.maybe_create_child_ref(&var, &[]),
+            };
 
             result.push(dap::types::Variable {
                 name: var.name.clone(),
@@ -1353,17 +1380,14 @@ impl<R: Read, W: Write> DapServer<R, W> {
         }
     }
 
-    fn maybe_create_child_ref(&mut self, var: &Variable) -> i64 {
+    fn maybe_create_child_ref(&mut self, var: &Variable, data: &[u8]) -> i64 {
         match &var.type_info.kind {
             TypeKind::Struct(members) if !members.is_empty() => {
                 let children: Vec<(String, String, String)> = members
                     .iter()
                     .map(|m| {
-                        (
-                            m.name.clone(),
-                            format!("<{}>", m.type_info.name),
-                            m.type_info.name.clone(),
-                        )
+                        let value = Self::format_member_value(m, data);
+                        (m.name.clone(), value, m.type_info.name.clone())
                     })
                     .collect();
                 let r = self.alloc_var_ref();
@@ -1375,11 +1399,8 @@ impl<R: Read, W: Write> DapServer<R, W> {
                 let children: Vec<(String, String, String)> = members
                     .iter()
                     .map(|m| {
-                        (
-                            m.name.clone(),
-                            format!("<{}>", m.type_info.name),
-                            m.type_info.name.clone(),
-                        )
+                        let value = Self::format_member_value(m, data);
+                        (m.name.clone(), value, m.type_info.name.clone())
                     })
                     .collect();
                 let r = self.alloc_var_ref();
@@ -1387,25 +1408,97 @@ impl<R: Read, W: Write> DapServer<R, W> {
                     .insert(r, VariableScope::Children(children));
                 r
             }
-            TypeKind::Enum { variants, .. } if !variants.is_empty() => {
-                let children: Vec<(String, String, String)> = variants
-                    .iter()
-                    .map(|v| {
-                        let detail = if v.members.is_empty() {
-                            "(unit)".to_string()
-                        } else {
-                            format!("({} fields)", v.members.len())
-                        };
-                        (v.name.clone(), detail, "variant".to_string())
-                    })
-                    .collect();
-                let r = self.alloc_var_ref();
-                self.variable_refs
-                    .insert(r, VariableScope::Children(children));
-                r
+            TypeKind::Enum {
+                discriminant,
+                variants,
+            } if !variants.is_empty() => {
+                // Read discriminant to find the active variant
+                let discr_val = discriminant.as_ref().and_then(|d| {
+                    let start = d.offset as usize;
+                    let dsize = d.type_info.byte_size as usize;
+                    let end = start + dsize;
+                    if end <= data.len() {
+                        match dsize {
+                            1 => Some(data[start] as u64),
+                            2 => Some(u16::from_le_bytes(
+                                data[start..end].try_into().ok()?,
+                            ) as u64),
+                            4 => Some(u32::from_le_bytes(
+                                data[start..end].try_into().ok()?,
+                            ) as u64),
+                            8 => Some(u64::from_le_bytes(
+                                data[start..end].try_into().ok()?,
+                            )),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                });
+
+                // Find matching variant (or default with discr_value == None)
+                let active = discr_val
+                    .and_then(|dv| variants.iter().find(|v| v.discr_value == Some(dv)))
+                    .or_else(|| variants.iter().find(|v| v.discr_value.is_none()));
+
+                if let Some(v) = active {
+                    if v.members.is_empty() {
+                        // Unit variant — no children to expand
+                        return 0;
+                    }
+                    // Show the active variant's fields as children
+                    let children: Vec<(String, String, String)> = v
+                        .members
+                        .iter()
+                        .flat_map(|m| {
+                            // Each variant member is typically a struct wrapping the fields
+                            if let TypeKind::Struct(fields) = &m.type_info.kind {
+                                fields
+                                    .iter()
+                                    .map(|f| {
+                                        let start = m.offset as usize + f.offset as usize;
+                                        let end = start + f.type_info.byte_size as usize;
+                                        let value = if end <= data.len() {
+                                            variables::format_value(
+                                                &data[start..end],
+                                                &f.type_info,
+                                            )
+                                        } else {
+                                            "<?>".into()
+                                        };
+                                        (f.name.clone(), value, f.type_info.name.clone())
+                                    })
+                                    .collect::<Vec<_>>()
+                            } else {
+                                let value = Self::format_member_value(m, data);
+                                vec![(m.name.clone(), value, m.type_info.name.clone())]
+                            }
+                        })
+                        .collect();
+                    if children.is_empty() {
+                        return 0;
+                    }
+                    let r = self.alloc_var_ref();
+                    self.variable_refs
+                        .insert(r, VariableScope::Children(children));
+                    r
+                } else {
+                    0
+                }
             }
             _ => 0,
         }
+    }
+
+    /// Format a struct/union member's value from raw parent data.
+    fn format_member_value(m: &variables::MemberInfo, data: &[u8]) -> String {
+        let start = m.offset as usize;
+        let end = start + m.type_info.byte_size as usize;
+        if data.is_empty() || end > data.len() {
+            return format!("<{}>", m.type_info.name);
+        }
+        let member_data = &data[start..end];
+        variables::format_value(member_data, &m.type_info)
     }
 
     // ── Thread switching ───────────────────────────────────────────────
@@ -1820,6 +1913,180 @@ mod tests {
         assert_eq!(r1, 1);
         assert_eq!(r2, 2);
         assert_eq!(server.next_var_ref, 3);
+    }
+
+    #[test]
+    fn maybe_create_child_ref_formats_struct_values() {
+        use crate::variables::{MemberInfo, TypeInfo, TypeKind};
+
+        let input = BufReader::new(std::io::empty());
+        let output = BufWriter::new(std::io::sink());
+        let mut server = DapServer::new(input, output);
+
+        // Build a struct variable: { x: i32, y: i32 }
+        let var = Variable {
+            name: "point".into(),
+            type_info: TypeInfo {
+                name: "Point".into(),
+                byte_size: 8,
+                kind: TypeKind::Struct(vec![
+                    MemberInfo {
+                        name: "x".into(),
+                        type_info: TypeInfo {
+                            name: "i32".into(),
+                            byte_size: 4,
+                            kind: TypeKind::SignedInt,
+                        },
+                        offset: 0,
+                    },
+                    MemberInfo {
+                        name: "y".into(),
+                        type_info: TypeInfo {
+                            name: "i32".into(),
+                            byte_size: 4,
+                            kind: TypeKind::SignedInt,
+                        },
+                        offset: 4,
+                    },
+                ]),
+            },
+            location_expr: vec![],
+        };
+
+        // Raw data: x=42, y=-7
+        let mut data = Vec::new();
+        data.extend_from_slice(&42i32.to_le_bytes());
+        data.extend_from_slice(&(-7i32).to_le_bytes());
+
+        let r = server.maybe_create_child_ref(&var, &data);
+        assert!(r > 0, "should allocate a variable reference");
+
+        // Verify children have actual values, not <TypeName> placeholders
+        if let Some(VariableScope::Children(children)) = server.variable_refs.get(&r) {
+            assert_eq!(children.len(), 2);
+            assert_eq!(children[0].0, "x");
+            assert_eq!(children[0].1, "42");
+            assert_eq!(children[1].0, "y");
+            assert_eq!(children[1].1, "-7");
+        } else {
+            panic!("expected Children variant");
+        }
+    }
+
+    #[test]
+    fn maybe_create_child_ref_formats_enum_active_variant() {
+        use crate::variables::{EnumVariant, MemberInfo, TypeInfo, TypeKind};
+
+        let input = BufReader::new(std::io::empty());
+        let output = BufWriter::new(std::io::sink());
+        let mut server = DapServer::new(input, output);
+
+        // Option<i32> = Some(42)
+        // Layout: [discriminant:1][padding:3][value:4]
+        let var = Variable {
+            name: "opt".into(),
+            type_info: TypeInfo {
+                name: "Option<i32>".into(),
+                byte_size: 8,
+                kind: TypeKind::Enum {
+                    discriminant: Some(Box::new(MemberInfo {
+                        name: "discriminant".into(),
+                        type_info: TypeInfo {
+                            name: "u8".into(),
+                            byte_size: 1,
+                            kind: TypeKind::UnsignedInt,
+                        },
+                        offset: 0,
+                    })),
+                    variants: vec![
+                        EnumVariant {
+                            discr_value: Some(0),
+                            name: "None".into(),
+                            members: vec![],
+                        },
+                        EnumVariant {
+                            discr_value: Some(1),
+                            name: "Some".into(),
+                            members: vec![MemberInfo {
+                                name: "Some".into(),
+                                type_info: TypeInfo {
+                                    name: "i32".into(),
+                                    byte_size: 4,
+                                    kind: TypeKind::Struct(vec![MemberInfo {
+                                        name: "__0".into(),
+                                        type_info: TypeInfo {
+                                            name: "i32".into(),
+                                            byte_size: 4,
+                                            kind: TypeKind::SignedInt,
+                                        },
+                                        offset: 0,
+                                    }]),
+                                },
+                                offset: 4,
+                            }],
+                        },
+                    ],
+                },
+            },
+            location_expr: vec![],
+        };
+
+        // Some(42): discriminant=1 at byte 0, value=42 at bytes 4..8
+        let mut data = vec![0u8; 8];
+        data[0] = 1;
+        data[4..8].copy_from_slice(&42i32.to_le_bytes());
+
+        let r = server.maybe_create_child_ref(&var, &data);
+        assert!(r > 0, "Some variant should have children");
+
+        if let Some(VariableScope::Children(children)) = server.variable_refs.get(&r) {
+            assert_eq!(children.len(), 1);
+            assert_eq!(children[0].0, "__0");
+            assert_eq!(children[0].1, "42");
+        } else {
+            panic!("expected Children variant");
+        }
+
+        // None variant should have no children (ref = 0)
+        data[0] = 0;
+        let r = server.maybe_create_child_ref(&var, &data);
+        assert_eq!(r, 0, "None variant should have no children");
+    }
+
+    #[test]
+    fn maybe_create_child_ref_no_data_fallback() {
+        use crate::variables::{MemberInfo, TypeInfo, TypeKind};
+
+        let input = BufReader::new(std::io::empty());
+        let output = BufWriter::new(std::io::sink());
+        let mut server = DapServer::new(input, output);
+
+        let var = Variable {
+            name: "point".into(),
+            type_info: TypeInfo {
+                name: "Point".into(),
+                byte_size: 8,
+                kind: TypeKind::Struct(vec![MemberInfo {
+                    name: "x".into(),
+                    type_info: TypeInfo {
+                        name: "i32".into(),
+                        byte_size: 4,
+                        kind: TypeKind::SignedInt,
+                    },
+                    offset: 0,
+                }]),
+            },
+            location_expr: vec![],
+        };
+
+        // Empty data: should fall back to <TypeName>
+        let r = server.maybe_create_child_ref(&var, &[]);
+        assert!(r > 0);
+        if let Some(VariableScope::Children(children)) = server.variable_refs.get(&r) {
+            assert_eq!(children[0].1, "<i32>");
+        } else {
+            panic!("expected Children variant");
+        }
     }
 
     #[test]

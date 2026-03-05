@@ -816,6 +816,64 @@ impl Target {
         Ok(Some((var, formatted)))
     }
 
+    /// Read a variable's raw data bytes at the current PC.
+    ///
+    /// Like `read_variable()`, but returns the raw bytes instead of a
+    /// formatted string. Used by the DAP server to format child members.
+    pub fn read_variable_data(&self, name: &str) -> Result<Option<(Variable, Vec<u8>)>> {
+        let var_reader = self
+            .var_reader
+            .as_ref()
+            .ok_or_else(|| Error::Other("no DWARF variable info".into()))?;
+
+        let regs = self.read_registers()?;
+        let pc = regs.pc();
+
+        let var = match var_reader.find_variable(pc, name)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        let encoding = var_reader.encoding_for_pc(pc)?;
+        let dwarf_regs = self.dwarf_register_snapshot(&regs);
+
+        let ctx = crate::dwarf_expr::EvalContext {
+            registers: &dwarf_regs,
+            cfa: 0,
+            frame_base: Some(regs.get("rbp").unwrap_or(0)),
+            read_memory: &|addr, len| self.process.read_memory(VirtAddr(addr), len),
+        };
+
+        let result =
+            crate::dwarf_expr::evaluate(&var.location_expr, encoding, &ctx)?;
+
+        let data = match &result {
+            crate::dwarf_expr::ExprResult::Address(addr) => {
+                self.process
+                    .read_memory(VirtAddr(*addr), var.type_info.byte_size as usize)?
+            }
+            crate::dwarf_expr::ExprResult::Register(reg) => {
+                let val = dwarf_regs
+                    .iter()
+                    .find(|(r, _)| *r == *reg)
+                    .map(|(_, v)| *v)
+                    .unwrap_or(0);
+                val.to_le_bytes().to_vec()
+            }
+            crate::dwarf_expr::ExprResult::Constant(val) => {
+                val.to_le_bytes().to_vec()
+            }
+            crate::dwarf_expr::ExprResult::OptimizedOut => {
+                return Err(Error::Other("variable optimized out".into()));
+            }
+            crate::dwarf_expr::ExprResult::Pieces(_) => {
+                return Err(Error::Other("multi-piece variable not supported".into()));
+            }
+        };
+
+        Ok(Some((var, data)))
+    }
+
     /// List all variables visible at the current PC.
     pub fn list_variables(&self) -> Result<Vec<Variable>> {
         let var_reader = self
