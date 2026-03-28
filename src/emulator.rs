@@ -956,26 +956,41 @@ mod tests {
 
     /// Returns true if unicorn can successfully execute x86_64 code
     /// on this platform. Used to skip execution tests gracefully.
+    ///
+    /// Spawns a **child process** that attempts to run a trivial NOP
+    /// via unicorn. If the child exits with code 0, unicorn works.
+    /// If the child is killed by SIGILL (or any other signal), we
+    /// know this platform can't execute and we skip. This avoids
+    /// taking down the test runner with an uncatchable signal.
     fn unicorn_can_execute() -> bool {
-        use std::panic;
-        // Catch both panics and SIGILL by attempting execution in
-        // the current thread. If this returns Err, we skip.
-        let result = panic::catch_unwind(|| {
-            let mut uc = match Unicorn::new(Arch::X86, Mode::MODE_64) {
-                Ok(u) => u,
-                Err(_) => return false,
-            };
-            if uc.mem_map(0x1000, 0x1000, Prot::ALL).is_err() {
-                return false;
-            }
-            // NOP (0x90)
-            if uc.mem_write(0x1000, &[0x90]).is_err() {
-                return false;
-            }
-            // Execute 1 instruction
-            uc.emu_start(0x1000, 0x1001, 0, 1).is_ok()
-        });
-        result.unwrap_or(false)
+        use std::sync::OnceLock;
+        static RESULT: OnceLock<bool> = OnceLock::new();
+
+        *RESULT.get_or_init(|| {
+            let exe = std::env::current_exe().unwrap();
+            // Run a hidden test that does the actual probe.
+            // If it exits 0, unicorn works. Any other exit = no.
+            let status = std::process::Command::new(exe)
+                .arg("--test-threads=1")
+                .arg("emulator::tests::__unicorn_probe")
+                .arg("--exact")
+                .arg("--nocapture")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            matches!(status, Ok(s) if s.success())
+        })
+    }
+
+    /// Internal probe test — executed in a child process by
+    /// `unicorn_can_execute()`. Not meant to be run directly.
+    #[test]
+    fn __unicorn_probe() {
+        let mut uc = Unicorn::new(Arch::X86, Mode::MODE_64).unwrap();
+        uc.mem_map(0x1000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(0x1000, &[0x90]).unwrap(); // NOP
+        uc.emu_start(0x1000, 0x1001, 0, 1).unwrap();
+        // If we reach here, unicorn works. Exit 0.
     }
 
     macro_rules! skip_if_no_unicorn {
