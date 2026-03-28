@@ -974,6 +974,7 @@ mod tests {
                 .arg("--test-threads=1")
                 .arg("emulator::tests::__unicorn_probe")
                 .arg("--exact")
+                .arg("--ignored")
                 .arg("--nocapture")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -985,6 +986,7 @@ mod tests {
     /// Internal probe test — executed in a child process by
     /// `unicorn_can_execute()`. Not meant to be run directly.
     #[test]
+    #[ignore]
     fn __unicorn_probe() {
         let mut uc = Unicorn::new(Arch::X86, Mode::MODE_64).unwrap();
         uc.mem_map(0x1000, 0x1000, Prot::ALL).unwrap();
