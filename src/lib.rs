@@ -61,6 +61,12 @@
 //! - [`coredump`] — ELF core dump generation from a stopped process.
 //! - [`shared_lib`] — Shared library tracking via `r_debug` / `link_map`. *(Linux-only)*
 //!
+//! ## Automation
+//!
+//! - [`event_log`] — Structured event logging for debug sessions (syscalls, signals, bypass actions, secrets).
+//! - [`antianalysis`] — Runtime anti-analysis bypass engine (ptrace, /proc, timing, INT3).
+//! - [`secret_scan`] — Automated memory secret extraction (differential strings, entropy, known patterns).
+//!
 //! ## Integration
 //!
 //! - [`gdb_rsp`] — GDB Remote Serial Protocol server for external tool integration.
@@ -102,6 +108,9 @@ pub mod heap_exploit;
 pub mod rop_chain;
 pub mod one_gadget;
 pub mod tube;
+pub mod event_log;
+pub mod antianalysis;
+pub mod secret_scan;
 
 // Linux-only modules (ptrace, user_regs_struct, etc.)
 #[cfg(target_os = "linux")]

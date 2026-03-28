@@ -156,9 +156,45 @@ pub static SYSCALL_TABLE: &[SyscallDef] = &[
         ret: ArgType::Int,
     },
     SyscallDef {
+        number: 37,
+        name: "alarm",
+        args: &[("seconds", ArgType::Uint)],
+        ret: ArgType::Uint,
+    },
+    SyscallDef {
+        number: 38,
+        name: "setitimer",
+        args: &[("which", ArgType::Uint), ("new_value", ArgType::Ptr), ("old_value", ArgType::Ptr)],
+        ret: ArgType::Int,
+    },
+    SyscallDef {
+        number: 13,
+        name: "rt_sigaction",
+        args: &[("signum", ArgType::Signal), ("act", ArgType::Ptr), ("oldact", ArgType::Ptr), ("sigsetsize", ArgType::Size)],
+        ret: ArgType::Int,
+    },
+    SyscallDef {
+        number: 14,
+        name: "rt_sigprocmask",
+        args: &[("how", ArgType::Uint), ("set", ArgType::Ptr), ("oldset", ArgType::Ptr), ("sigsetsize", ArgType::Size)],
+        ret: ArgType::Int,
+    },
+    SyscallDef {
         number: 62,
         name: "kill",
         args: &[("pid", ArgType::Int), ("sig", ArgType::Signal)],
+        ret: ArgType::Int,
+    },
+    SyscallDef {
+        number: 200,
+        name: "tkill",
+        args: &[("tid", ArgType::Int), ("sig", ArgType::Signal)],
+        ret: ArgType::Int,
+    },
+    SyscallDef {
+        number: 234,
+        name: "tgkill",
+        args: &[("tgid", ArgType::Int), ("tid", ArgType::Int), ("sig", ArgType::Signal)],
         ret: ArgType::Int,
     },
     SyscallDef {

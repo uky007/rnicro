@@ -6,7 +6,10 @@
 //! used by the CLI.
 
 use crate::antidebug::{self, AntiDebugFinding, BypassConfig};
+use crate::antianalysis::{BypassAction, BypassEngine, BypassEngineConfig};
+use crate::event_log::{EventLog, EventKind};
 use crate::got_hook::GotHookManager;
+use crate::secret_scan::{SecretScanner, SecretScanConfig};
 use crate::memscan::{self, ScanMatch};
 use crate::breakpoint::BreakpointManager;
 use crate::checksec::{self, ChecksecResult};
@@ -21,6 +24,7 @@ use crate::procfs::{self, MemoryRegion};
 use crate::registers::{self, Registers};
 use crate::rop::{self, Gadget};
 use crate::strings::{self, ExtractedString};
+use crate::syscall_trace;
 use crate::types::{ProcessState, StopReason, VirtAddr};
 use crate::unwind::Unwinder;
 use crate::rust_type;
@@ -85,16 +89,25 @@ pub struct Target {
     bypass_config: BypassConfig,
     /// GOT hook manager.
     got_hooks: GotHookManager,
+    /// Structured event log for the session.
+    event_log: EventLog,
+    /// Runtime anti-analysis bypass engine.
+    bypass_engine: BypassEngine,
+    /// Memory secret scanner.
+    secret_scanner: SecretScanner,
 }
 
 impl Target {
     /// Launch a program and begin debugging it.
     pub fn launch(program: &Path, args: &[&str]) -> Result<Self> {
         let process = Process::launch(program, args)?;
+        let pid = process.pid().as_raw();
         let elf = ElfFile::load(program)?;
         let dwarf = DwarfInfo::load(program).ok();
         let var_reader = VariableReader::load(program).ok();
         let unwinder = Unwinder::load(program).ok();
+        let mut bypass_engine = BypassEngine::new(BypassEngineConfig::default());
+        bypass_engine.set_tracee_ids(pid, pid);
         Ok(Target {
             program_path: program.to_string_lossy().into_owned(),
             process,
@@ -110,17 +123,23 @@ impl Target {
             catch_all_syscalls: false,
             bypass_config: BypassConfig::default(),
             got_hooks: GotHookManager::new(),
+            event_log: EventLog::new(),
+            bypass_engine,
+            secret_scanner: SecretScanner::default_config(),
         })
     }
 
     /// Attach to an existing process by PID.
     pub fn attach(pid: nix::unistd::Pid) -> Result<Self> {
         let process = Process::attach(pid)?;
-        let exe_path = format!("/proc/{}/exe", pid);
+        let pid_raw = pid.as_raw();
+        let exe_path = format!("/proc/{}/exe", pid_raw);
         let elf = ElfFile::load(Path::new(&exe_path))?;
         let dwarf = DwarfInfo::load(Path::new(&exe_path)).ok();
         let var_reader = VariableReader::load(Path::new(&exe_path)).ok();
         let unwinder = Unwinder::load(Path::new(&exe_path)).ok();
+        let mut bypass_engine = BypassEngine::new(BypassEngineConfig::default());
+        bypass_engine.set_tracee_ids(pid_raw, pid_raw);
         Ok(Target {
             program_path: exe_path,
             process,
@@ -136,6 +155,9 @@ impl Target {
             catch_all_syscalls: false,
             bypass_config: BypassConfig::default(),
             got_hooks: GotHookManager::new(),
+            event_log: EventLog::new(),
+            bypass_engine,
+            secret_scanner: SecretScanner::default_config(),
         })
     }
 
@@ -146,10 +168,19 @@ impl Target {
     /// Delivers a pending signal if one was stored by the signal policy.
     /// Uses PTRACE_SYSCALL instead of PTRACE_CONT when syscall catching is active.
     /// Auto-continues past conditional breakpoints whose condition is false.
+    /// All events (including auto-continued ones) are recorded in the event log.
+    /// Anti-analysis bypass and secret scanning are applied automatically.
     pub fn resume(&mut self) -> Result<StopReason> {
+        // Always use PTRACE_SYSCALL when the bypass engine is active, so we
+        // can intercept anti-debug syscalls even when the user hasn't
+        // explicitly asked to catch any.
+        let bypass_active = self.bypass_engine.config().bypass_ptrace
+            || self.bypass_engine.config().bypass_proc_status
+            || self.bypass_engine.config().bypass_prctl_dumpable;
+
         loop {
             let sig = self.pending_signal.take();
-            if self.catch_all_syscalls || !self.caught_syscalls.is_empty() {
+            if self.catch_all_syscalls || !self.caught_syscalls.is_empty() || bypass_active {
                 self.process.resume_with_syscall_trap(sig)?;
             } else if let Some(s) = sig {
                 self.process.resume_with_signal(s)?;
@@ -158,6 +189,98 @@ impl Target {
             }
             let reason = self.process.wait_on_signal()?;
             self.handle_stop(&reason)?;
+
+            // Log every event (even auto-continued ones)
+            self.log_stop_reason(&reason);
+
+            // ── Anti-analysis bypass on syscall entry ──
+            if let StopReason::SyscallEntry { number, args } = &reason {
+                let read_string = |addr: u64| -> Option<String> {
+                    self.process
+                        .read_memory(VirtAddr(addr), 256)
+                        .ok()
+                        .map(|bytes| {
+                            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+                            String::from_utf8_lossy(&bytes[..end]).into_owned()
+                        })
+                };
+                let action =
+                    self.bypass_engine.on_syscall_entry(*number, args, &read_string);
+
+                match action {
+                    BypassAction::RewriteArg { arg_index, new_value } => {
+                        // Rewrite the syscall argument register
+                        if let Ok(mut regs) = self.read_registers() {
+                            let reg_name = match arg_index {
+                                0 => "rdi",
+                                1 => "rsi",
+                                2 => "rdx",
+                                3 => "r10",
+                                4 => "r8",
+                                5 => "r9",
+                                _ => "",
+                            };
+                            if !reg_name.is_empty() {
+                                let _ = regs.set(reg_name, new_value);
+                                let _ = self.write_registers(&regs);
+                                self.bypass_engine
+                                    .record_prctl_bypass(&mut self.event_log);
+                            }
+                        }
+                    }
+                    BypassAction::SkipSyscall => {
+                        // Neutralize the syscall by setting orig_rax to -1.
+                        // The kernel will return -ENOSYS but the exit handler
+                        // will overwrite rax with the fake return value.
+                        if let Ok(mut regs) = self.read_registers() {
+                            let _ = regs.set("orig_rax", u64::MAX); // -1 as u64
+                            let _ = self.write_registers(&regs);
+                        }
+                    }
+                    _ => {} // None or pending exit actions handled below
+                }
+            }
+
+            // ── Anti-analysis bypass on syscall exit ──
+            if let StopReason::SyscallExit { number, retval } = &reason {
+                let action =
+                    self.bypass_engine
+                        .on_syscall_exit(*number, *retval, &mut self.event_log);
+
+                match action {
+                    BypassAction::FakeReturnValue(fake_val) => {
+                        if let Ok(mut regs) = self.read_registers() {
+                            let _ = regs.set("rax", fake_val as u64);
+                            let _ = self.write_registers(&regs);
+                        }
+                    }
+                    BypassAction::SpoofTracerPid => {
+                        // Read the buffer that was just written by the read() syscall,
+                        // spoof TracerPid, and write it back.
+                        // The buffer address is in rsi (arg1 of read)
+                        if let Ok(regs) = self.read_registers() {
+                            let buf_addr = regs.get("rsi").unwrap_or(0);
+                            let count = regs.get("rax").unwrap_or(0) as usize;
+                            if buf_addr != 0 && count > 0 {
+                                if let Ok(buf) =
+                                    self.process.read_memory(VirtAddr(buf_addr), count)
+                                {
+                                    let spoofed = BypassEngine::spoof_tracer_pid(&buf);
+                                    let _ = self
+                                        .process
+                                        .write_memory(VirtAddr(buf_addr), &spoofed);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+
+                // ── Secret scanner trigger on sensitive syscalls ──
+                if self.secret_scanner.should_trigger_on_syscall(*number) {
+                    self.run_secret_scan();
+                }
+            }
 
             // Auto-continue for uncaught syscalls
             match &reason {
@@ -183,6 +306,17 @@ impl Target {
                 }
             }
 
+            // Auto-skip INT3 traps that aren't user breakpoints
+            if let StopReason::BreakpointHit { addr } = &reason {
+                if self.bypass_engine.should_skip_int3()
+                    && self.breakpoints.get_at(*addr).is_none()
+                {
+                    self.bypass_engine
+                        .record_int3_skip(*addr, &mut self.event_log);
+                    continue;
+                }
+            }
+
             return Ok(reason);
         }
     }
@@ -198,6 +332,7 @@ impl Target {
         self.process.step_instruction()?;
         let reason = self.process.wait_on_signal()?;
         self.handle_stop(&reason)?;
+        self.log_stop_reason(&reason);
         Ok(reason)
     }
 
@@ -1027,5 +1162,139 @@ impl Target {
             .filter(|r| r.dwarf_id >= 0)
             .filter_map(|r| regs.get(r.name).ok().map(|v| (r.dwarf_id as u16, v)))
             .collect()
+    }
+
+    // ── Event logging ──────────────────────────────────────────────
+
+    /// Record a stop reason as a structured event in the session log.
+    fn log_stop_reason(&mut self, reason: &StopReason) {
+        let kind = match reason {
+            StopReason::SyscallEntry { number, args } => {
+                let read_string = |addr: u64| -> Result<String> {
+                    let bytes = self.process.read_memory(VirtAddr(addr), 256)?;
+                    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+                    Ok(String::from_utf8_lossy(&bytes[..end]).into_owned())
+                };
+                let name = crate::syscall::name(*number)
+                    .unwrap_or("unknown")
+                    .to_string();
+                let args_formatted =
+                    syscall_trace::format_syscall_entry(*number, args, &read_string);
+                EventKind::SyscallEntry {
+                    number: *number,
+                    name,
+                    args_formatted,
+                }
+            }
+            StopReason::SyscallExit { number, retval } => {
+                let name = crate::syscall::name(*number)
+                    .unwrap_or("unknown")
+                    .to_string();
+                let retval_formatted =
+                    syscall_trace::format_syscall_return(*number, *retval);
+                EventKind::SyscallExit {
+                    number: *number,
+                    name,
+                    retval: *retval,
+                    retval_formatted,
+                }
+            }
+            StopReason::Signal(sig) => EventKind::Signal {
+                signal: format!("{}", sig),
+                addr: self
+                    .read_registers()
+                    .ok()
+                    .map(|r| VirtAddr(r.pc())),
+            },
+            StopReason::BreakpointHit { addr } => {
+                let function = self.current_function().ok().flatten();
+                let location = self
+                    .source_location()
+                    .ok()
+                    .flatten()
+                    .map(|loc| format!("{}:{}", loc.file, loc.line));
+                EventKind::BreakpointHit {
+                    addr: *addr,
+                    function,
+                    location,
+                }
+            }
+            StopReason::WatchpointHit { addr, .. } => EventKind::BreakpointHit {
+                addr: *addr,
+                function: None,
+                location: Some("watchpoint".into()),
+            },
+            StopReason::Exited(code) => EventKind::ProcessExited { code: *code },
+            StopReason::Terminated(sig) => EventKind::ProcessTerminated {
+                signal: format!("{}", sig),
+            },
+            StopReason::ThreadCreated(pid) => EventKind::ThreadCreated {
+                tid: pid.as_raw(),
+            },
+            StopReason::ThreadExited(pid) => EventKind::ThreadExited {
+                tid: pid.as_raw(),
+            },
+            StopReason::SingleStep => return, // Too noisy, skip
+        };
+        self.event_log.record(kind);
+    }
+
+    /// Get a reference to the event log.
+    pub fn event_log(&self) -> &EventLog {
+        &self.event_log
+    }
+
+    /// Get a mutable reference to the event log.
+    pub fn event_log_mut(&mut self) -> &mut EventLog {
+        &mut self.event_log
+    }
+
+    // ── Anti-analysis bypass ───────────────────────────────────────
+
+    /// Get a reference to the bypass engine.
+    pub fn bypass_engine(&self) -> &BypassEngine {
+        &self.bypass_engine
+    }
+
+    /// Get a mutable reference to the bypass engine.
+    pub fn bypass_engine_mut(&mut self) -> &mut BypassEngine {
+        &mut self.bypass_engine
+    }
+
+    // ── Secret scanning ────────────────────────────────────────────
+
+    /// Get a reference to the secret scanner.
+    pub fn secret_scanner(&self) -> &SecretScanner {
+        &self.secret_scanner
+    }
+
+    /// Get a mutable reference to the secret scanner.
+    pub fn secret_scanner_mut(&mut self) -> &mut SecretScanner {
+        &mut self.secret_scanner
+    }
+
+    /// Run a secret scan across all writable memory regions.
+    ///
+    /// Called automatically on trigger syscalls (write, sendto, etc.)
+    /// or can be invoked manually.
+    pub fn run_secret_scan(&mut self) -> Vec<crate::secret_scan::SecretFinding> {
+        let maps = match self.memory_maps() {
+            Ok(m) => m,
+            Err(_) => return Vec::new(),
+        };
+
+        let regions: Vec<(u64, u64, bool)> = maps
+            .iter()
+            .filter(|m| m.perms.read)
+            .map(|m| (m.start.addr(), m.end.addr(), m.perms.write))
+            .collect();
+
+        let process = &self.process;
+        let read_mem = |addr: u64, len: usize| -> Option<Vec<u8>> {
+            process.read_memory(VirtAddr(addr), len).ok()
+        };
+
+        self.secret_scanner
+            .scan_regions(&regions, &read_mem, &mut self.event_log)
     }
 }
