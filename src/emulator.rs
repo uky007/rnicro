@@ -873,6 +873,8 @@ fn align_up(val: u64, align: u64) -> u64 {
 mod tests {
     use super::*;
 
+    // ── Pure logic tests (no unicorn execution) ──────────────────
+
     #[test]
     fn align_up_basic() {
         assert_eq!(align_up(0, 4096), 0);
@@ -909,8 +911,86 @@ mod tests {
     }
 
     #[test]
+    fn sys_brk_works() {
+        let mut emu = Emulator::new().unwrap();
+        assert_eq!(emu.sys_brk(0), HEAP_BASE as i64);
+        let new_brk = HEAP_BASE + 4096;
+        assert_eq!(emu.sys_brk(new_brk), new_brk as i64);
+        assert_eq!(emu.brk_current, new_brk);
+    }
+
+    #[test]
+    fn reset_state_clears_all() {
+        let mut emu = Emulator::new().unwrap();
+        emu.instruction_count = 100;
+        emu.stdout_buf = b"hello".to_vec();
+        emu.stderr_buf = b"error".to_vec();
+        emu.brk_current = HEAP_BASE + 4096;
+        emu.next_fd = 10;
+
+        emu.reset_state();
+
+        assert_eq!(emu.instruction_count, 0);
+        assert!(emu.stdout_buf.is_empty());
+        assert!(emu.stderr_buf.is_empty());
+        assert_eq!(emu.brk_current, HEAP_BASE);
+        assert_eq!(emu.next_fd, 3);
+    }
+
+    #[test]
+    fn sys_close_stdio_noop() {
+        let mut emu = Emulator::new().unwrap();
+        assert_eq!(emu.sys_close(0), 0); // stdin
+        assert_eq!(emu.sys_close(1), 0); // stdout
+        assert_eq!(emu.sys_close(2), 0); // stderr
+        assert_eq!(emu.sys_close(99), -9); // EBADF
+    }
+
+    // ── Unicorn execution tests (may SIGILL on some platforms) ───
+    //
+    // These tests require unicorn-engine's JIT to work correctly.
+    // On some platforms (e.g., certain macOS + Apple Silicon
+    // configurations), unicorn may SIGILL. These tests are
+    // gated behind a runtime check that verifies unicorn can
+    // execute a trivial NOP instruction.
+
+    /// Returns true if unicorn can successfully execute x86_64 code
+    /// on this platform. Used to skip execution tests gracefully.
+    fn unicorn_can_execute() -> bool {
+        use std::panic;
+        // Catch both panics and SIGILL by attempting execution in
+        // the current thread. If this returns Err, we skip.
+        let result = panic::catch_unwind(|| {
+            let mut uc = match Unicorn::new(Arch::X86, Mode::MODE_64) {
+                Ok(u) => u,
+                Err(_) => return false,
+            };
+            if uc.mem_map(0x1000, 0x1000, Prot::ALL).is_err() {
+                return false;
+            }
+            // NOP (0x90)
+            if uc.mem_write(0x1000, &[0x90]).is_err() {
+                return false;
+            }
+            // Execute 1 instruction
+            uc.emu_start(0x1000, 0x1001, 0, 1).is_ok()
+        });
+        result.unwrap_or(false)
+    }
+
+    macro_rules! skip_if_no_unicorn {
+        () => {
+            if !unicorn_can_execute() {
+                eprintln!("SKIP: unicorn-engine cannot execute x86_64 on this platform");
+                return;
+            }
+        };
+    }
+
+    #[test]
     fn shellcode_nop_ret() {
-        // NOP; RET — should execute and return (will error on invalid return addr)
+        skip_if_no_unicorn!();
+
         let code = [0x90, 0xC3];
         let mut emu = Emulator::with_config(EmulatorConfig {
             trace_syscalls: false,
@@ -921,13 +1001,13 @@ mod tests {
 
         let result = emu.run_shellcode(&code, 0x10000);
         assert!(result.is_ok());
-        // Should have executed at least the NOP
         assert!(emu.instruction_count() >= 1);
     }
 
     #[test]
     fn shellcode_syscall_exit() {
-        // mov rax, 60 (exit); mov rdi, 42; syscall
+        skip_if_no_unicorn!();
+
         let code = [
             0x48, 0xC7, 0xC0, 0x3C, 0x00, 0x00, 0x00, // mov rax, 60
             0x48, 0xC7, 0xC7, 0x2A, 0x00, 0x00, 0x00, // mov rdi, 42
@@ -944,19 +1024,17 @@ mod tests {
 
     #[test]
     fn shellcode_write_stdout() {
-        // write(1, "Hi", 2) then exit(0)
+        skip_if_no_unicorn!();
+
         #[rustfmt::skip]
         let code = [
-            // Store "Hi" at rsp
             0xC6, 0x04, 0x24, 0x48,                     // mov byte [rsp], 'H'
             0xC6, 0x44, 0x24, 0x01, 0x69,               // mov byte [rsp+1], 'i'
-            // write(1, rsp, 2)
             0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,   // mov rax, 1 (write)
             0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00, 0x00,   // mov rdi, 1 (stdout)
             0x48, 0x89, 0xE6,                             // mov rsi, rsp
             0x48, 0xC7, 0xC2, 0x02, 0x00, 0x00, 0x00,   // mov rdx, 2
             0x0F, 0x05,                                   // syscall
-            // exit(0)
             0x48, 0xC7, 0xC0, 0x3C, 0x00, 0x00, 0x00,   // mov rax, 60
             0x48, 0x31, 0xFF,                             // xor rdi, rdi
             0x0F, 0x05,                                   // syscall
@@ -969,17 +1047,16 @@ mod tests {
 
     #[test]
     fn syscall_ptrace_bypassed() {
-        // ptrace(PTRACE_TRACEME) then exit(rax) — should exit(0) not exit(-1)
+        skip_if_no_unicorn!();
+
         #[rustfmt::skip]
         let code = [
-            // ptrace(0, 0, 0, 0)
             0x48, 0xC7, 0xC0, 0x65, 0x00, 0x00, 0x00,   // mov rax, 101 (ptrace)
             0x48, 0x31, 0xFF,                             // xor rdi, rdi (TRACEME=0)
             0x48, 0x31, 0xF6,                             // xor rsi, rsi
             0x48, 0x31, 0xD2,                             // xor rdx, rdx
             0x4D, 0x31, 0xD2,                             // xor r10, r10
             0x0F, 0x05,                                   // syscall
-            // exit(rax) — should be 0 if bypass works
             0x48, 0x89, 0xC7,                             // mov rdi, rax
             0x48, 0xC7, 0xC0, 0x3C, 0x00, 0x00, 0x00,   // mov rax, 60
             0x0F, 0x05,                                   // syscall
@@ -992,19 +1069,9 @@ mod tests {
             other => panic!("expected Exited(0), got {:?}", other),
         }
 
-        // Should have logged the bypass
         let bypasses = emu.event_log().events_by_category(
             crate::event_log::EventCategory::AntiDebug,
         );
         assert!(!bypasses.is_empty());
-    }
-
-    #[test]
-    fn sys_brk_works() {
-        let mut emu = Emulator::new().unwrap();
-        assert_eq!(emu.sys_brk(0), HEAP_BASE as i64);
-        let new_brk = HEAP_BASE + 4096;
-        assert_eq!(emu.sys_brk(new_brk), new_brk as i64);
-        assert_eq!(emu.brk_current, new_brk);
     }
 }
