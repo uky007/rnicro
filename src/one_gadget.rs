@@ -379,7 +379,7 @@ fn update_reg_state(
             if insn.op1_kind() == OpKind::Immediate32 || insn.op1_kind() == OpKind::Immediate64
                 || insn.op1_kind() == OpKind::Immediate32to64
             {
-                regs.insert(reg64, SymValue::Constant(insn.immediate(1) as u64));
+                regs.insert(reg64, SymValue::Constant(insn.immediate(1)));
             }
         }
         // lea reg, [rip + disp]

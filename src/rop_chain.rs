@@ -141,7 +141,7 @@ fn classify_insns(insns: &[Instruction]) -> GadgetEffect {
     }
 
     // Two+ instructions ending in ret
-    if insns.len() >= 2 && insns.last().map(|i| is_ret(i)).unwrap_or(false) {
+    if insns.len() >= 2 && insns.last().map(is_ret).unwrap_or(false) {
         let first = &insns[0];
 
         // pop REG; ret
@@ -458,7 +458,7 @@ impl RopChainBuilder {
                 payload.extend_from_slice(&cg.gadget.addr.to_le_bytes());
                 elements.push(ChainElement {
                     offset,
-                    description: format!("{}", cg.gadget.instructions),
+                    description: cg.gadget.instructions.to_string(),
                     value: cg.gadget.addr,
                 });
             } else {
@@ -468,7 +468,7 @@ impl RopChainBuilder {
                 payload.extend_from_slice(&cg.gadget.addr.to_le_bytes());
                 elements.push(ChainElement {
                     offset,
-                    description: format!("{}", cg.gadget.instructions),
+                    description: cg.gadget.instructions.to_string(),
                     value: cg.gadget.addr,
                 });
                 let offset = payload.len();
@@ -511,7 +511,7 @@ impl RopChainBuilder {
         payload.extend_from_slice(&cg.gadget.addr.to_le_bytes());
         elements.push(ChainElement {
             offset,
-            description: format!("{}", cg.gadget.instructions),
+            description: cg.gadget.instructions.to_string(),
             value: cg.gadget.addr,
         });
 
@@ -657,7 +657,7 @@ mod tests {
 
         // Verify payload is non-empty and contains expected addresses
         assert!(!chain.payload.is_empty());
-        assert!(chain.payload.len() % 8 == 0);
+        assert!(chain.payload.len().is_multiple_of(8));
 
         // Extract u64 values from payload
         let values: Vec<u64> = chain.payload

@@ -968,6 +968,10 @@ impl<R: Read, W: Write> DapServer<R, W> {
             Err(e) => { self.send_error(seq, &e); return Ok(()); }
         };
         let offset = args.instruction_offset.unwrap_or(0) as i64;
+        if args.instruction_count < 0 {
+            self.send_error(seq, "instruction_count must be non-negative");
+            return Ok(());
+        }
         let count = (args.instruction_count as usize).min(MAX_INSTRUCTION_COUNT);
         let start = if offset >= 0 {
             addr + offset as u64
@@ -1030,6 +1034,10 @@ impl<R: Read, W: Write> DapServer<R, W> {
         } else {
             addr.saturating_sub((-offset) as u64)
         };
+        if args.count < 0 {
+            self.send_error(seq, "count must be non-negative");
+            return Ok(());
+        }
         let count = (args.count as usize).min(MAX_MEMORY_REQUEST);
 
         match target.read_memory(VirtAddr(start), count) {

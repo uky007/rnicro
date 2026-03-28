@@ -18,6 +18,12 @@ pub struct AslrCalculator {
     bases: HashMap<String, u64>,
 }
 
+impl Default for AslrCalculator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AslrCalculator {
     pub fn new() -> Self {
         Self {
@@ -178,6 +184,7 @@ pub struct LibcVersion {
 }
 
 /// In-memory libc offset database.
+#[derive(Default)]
 pub struct LibcDb {
     versions: Vec<LibcVersion>,
 }
@@ -185,7 +192,7 @@ pub struct LibcDb {
 impl LibcDb {
     /// Create an empty database.
     pub fn new() -> Self {
-        Self { versions: Vec::new() }
+        Self::default()
     }
 
     /// Add a libc version entry.

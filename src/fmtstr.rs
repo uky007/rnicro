@@ -178,7 +178,7 @@ fn generate_null_free_payload(
     // Two-pass approach: estimate format string length, then generate
     // with correct parameter offsets.
     let estimated_fmt_len = num_writes * 20;
-    let fmt_words = (estimated_fmt_len + config.word_size - 1) / config.word_size;
+    let fmt_words = estimated_fmt_len.div_ceil(config.word_size);
 
     let build_fmt = |addr_word_offset: usize| -> (String, usize) {
         let mut fmt = String::new();
@@ -292,7 +292,7 @@ mod tests {
     fn find_offset_not_found() {
         let marker = b"AAAAAAAA";
         let output = "AAAAAAAA.0x1.0x2.0x3";
-        assert_eq!(find_offset(marker, &output), None);
+        assert_eq!(find_offset(marker, output), None);
     }
 
     #[test]

@@ -164,9 +164,8 @@ impl Lexer {
         }
 
         while let Some(ch) = self.peek_char() {
-            if is_hex && ch.is_ascii_hexdigit() {
-                s.push(self.next_char().unwrap());
-            } else if !is_hex && ch.is_ascii_digit() {
+            let valid = if is_hex { ch.is_ascii_hexdigit() } else { ch.is_ascii_digit() };
+            if valid {
                 s.push(self.next_char().unwrap());
             } else {
                 break;

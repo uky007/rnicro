@@ -330,8 +330,8 @@ impl BypassEngine {
         if self.config.suppress_self_signals && number == SYS_KILL {
             let target_pid = args[0] as i32;
             let sig = args[1];
-            if target_pid == self.tracee_pid || target_pid == 0 {
-                if is_anti_debug_signal(sig) {
+            if (target_pid == self.tracee_pid || target_pid == 0)
+                && is_anti_debug_signal(sig) {
                     self.pending_exit_action = Some(PendingAction {
                         syscall_number: SYS_KILL,
                         action: BypassAction::FakeReturnValue(0),
@@ -344,7 +344,6 @@ impl BypassEngine {
                     });
                     return BypassAction::SkipSyscall;
                 }
-            }
         }
 
         // tgkill(tgid, tid, sig) → suppress self-signal

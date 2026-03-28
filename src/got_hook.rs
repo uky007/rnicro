@@ -25,6 +25,12 @@ pub struct GotHookManager {
     hooks: Vec<GotHook>,
 }
 
+impl Default for GotHookManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GotHookManager {
     pub fn new() -> Self {
         Self { hooks: Vec::new() }
@@ -98,32 +104,30 @@ impl GotHookManager {
 ///   jmp rax                ; tail-call original function
 /// ```
 pub fn build_trampoline(original_target: u64) -> Vec<u8> {
-    let mut code = Vec::new();
-
     // Save caller-saved registers
-    code.push(0x50);                         // push rax
-    code.push(0x51);                         // push rcx
-    code.push(0x52);                         // push rdx
-    code.push(0x56);                         // push rsi
-    code.push(0x57);                         // push rdi
-    code.extend_from_slice(&[0x41, 0x50]);   // push r8
-    code.extend_from_slice(&[0x41, 0x51]);   // push r9
-    code.extend_from_slice(&[0x41, 0x52]);   // push r10
-    code.extend_from_slice(&[0x41, 0x53]);   // push r11
-
-    // INT3 — debugger intercepts here
-    code.push(0xCC);
-
-    // Restore registers
-    code.extend_from_slice(&[0x41, 0x5B]);   // pop r11
-    code.extend_from_slice(&[0x41, 0x5A]);   // pop r10
-    code.extend_from_slice(&[0x41, 0x59]);   // pop r9
-    code.extend_from_slice(&[0x41, 0x58]);   // pop r8
-    code.push(0x5F);                         // pop rdi
-    code.push(0x5E);                         // pop rsi
-    code.push(0x5A);                         // pop rdx
-    code.push(0x59);                         // pop rcx
-    code.push(0x58);                         // pop rax
+    let mut code = vec![
+        0x50,                                    // push rax
+        0x51,                                    // push rcx
+        0x52,                                    // push rdx
+        0x56,                                    // push rsi
+        0x57,                                    // push rdi
+        0x41, 0x50,                              // push r8
+        0x41, 0x51,                              // push r9
+        0x41, 0x52,                              // push r10
+        0x41, 0x53,                              // push r11
+        // INT3 — debugger intercepts here
+        0xCC,
+        // Restore registers
+        0x41, 0x5B,                              // pop r11
+        0x41, 0x5A,                              // pop r10
+        0x41, 0x59,                              // pop r9
+        0x41, 0x58,                              // pop r8
+        0x5F,                                    // pop rdi
+        0x5E,                                    // pop rsi
+        0x5A,                                    // pop rdx
+        0x59,                                    // pop rcx
+        0x58,                                    // pop rax
+    ];
 
     // movabs rax, <original_target>
     code.extend_from_slice(&[0x48, 0xB8]);

@@ -244,6 +244,6 @@ mod tests {
     fn scan_f32_value() {
         let mut data = vec![0u8; 12];
         data[4..8].copy_from_slice(&std::f32::consts::PI.to_le_bytes());
-        assert_eq!(scan_f32(&data, std::f32::consts::PI.into()), vec![4]);
+        assert_eq!(scan_f32(&data, std::f32::consts::PI), vec![4]);
     }
 }

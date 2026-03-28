@@ -382,16 +382,15 @@ impl SecretScanner {
 
         // Record findings in event log and dedup store
         for finding in &findings {
-            if !self.found_secrets.contains_key(&finding.addr.addr()) {
+            self.found_secrets.entry(finding.addr.addr()).or_insert_with(|| {
                 event_log.record(EventKind::SecretFound {
                     addr: finding.addr,
                     category: finding.category,
                     preview: finding.preview.clone(),
                     size: finding.size,
                 });
-                self.found_secrets
-                    .insert(finding.addr.addr(), finding.clone());
-            }
+                finding.clone()
+            });
         }
 
         findings
@@ -440,13 +439,11 @@ fn extract_printable_strings(data: &[u8], min_length: usize) -> Vec<(usize, Stri
             if start.is_none() {
                 start = Some(i);
             }
-        } else {
-            if let Some(s) = start.take() {
-                let len = i - s;
-                if len >= min_length {
-                    let text = String::from_utf8_lossy(&data[s..i]).into_owned();
-                    results.push((s, text));
-                }
+        } else if let Some(s) = start.take() {
+            let len = i - s;
+            if len >= min_length {
+                let text = String::from_utf8_lossy(&data[s..i]).into_owned();
+                results.push((s, text));
             }
         }
     }
@@ -727,7 +724,7 @@ mod tests {
     #[test]
     fn truncate_preview_long_masked() {
         let long = "AKIA1234567890abcdefghij";
-        let preview = truncate_preview(&long, 60);
+        let preview = truncate_preview(long, 60);
         // Should show first 4 and last 4 with masking
         assert!(preview.starts_with("AKIA"));
         assert!(preview.contains("****"));

@@ -47,7 +47,7 @@ pub struct EvalContext<'a> {
 
 impl<'a> EvalContext<'a> {
     fn register_value(&self, reg: gimli::Register) -> Option<u64> {
-        let num = reg.0 as u16;
+        let num = reg.0;
         self.registers.iter().find(|(r, _)| *r == num).map(|(_, v)| *v)
     }
 }
@@ -168,7 +168,7 @@ pub fn evaluate(
 fn convert_location(loc: &Location<EndianSlice<'_, LittleEndian>>) -> ExprResult {
     match loc {
         Location::Address { address } => ExprResult::Address(*address),
-        Location::Register { register } => ExprResult::Register(register.0 as u16),
+        Location::Register { register } => ExprResult::Register(register.0),
         Location::Value { value } => match value {
             Value::Generic(v) => ExprResult::Constant(*v),
             Value::I8(v) => ExprResult::Constant(*v as u64),
