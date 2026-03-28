@@ -1,16 +1,23 @@
 //! x86_64 CPU emulator for offline binary analysis.
 //!
 //! Wraps [unicorn-engine](https://www.unicorn-engine.org/) to provide
-//! controlled execution of Linux x86_64 ELF binaries without ptrace.
-//! All syscalls are intercepted and emulated, making anti-debug
-//! techniques ineffective.
+//! controlled execution of x86_64 code without ptrace. All syscalls are
+//! intercepted and emulated, making anti-debug techniques ineffective.
+//!
+//! # Scope
+//!
+//! This emulator targets **statically-linked ELF binaries** and **raw
+//! shellcode**. Dynamically-linked binaries (those requiring ld-linux,
+//! glibc, or shared libraries) are not supported — PT_INTERP, dynamic
+//! relocations, and real file I/O are not emulated. For dynamic binaries,
+//! use the ptrace-based debugger on Linux instead.
 //!
 //! # Use cases
 //!
-//! - Malware analysis (Mirai, packers, obfuscated code)
-//! - Shellcode execution in a sandbox
-//! - Unpacking / deobfuscation (run to OEP, dump)
-//! - Cross-platform analysis (run Linux binaries on macOS)
+//! - Shellcode analysis in a sandbox
+//! - Static ELF malware (Mirai-style, packed/obfuscated)
+//! - Unpacking / deobfuscation (run to OEP, dump memory)
+//! - Cross-platform analysis (works on macOS and Linux)
 //!
 //! # Example
 //!
@@ -205,8 +212,25 @@ impl Emulator {
         self.breakpoints.remove(&addr);
     }
 
+    /// Reset execution state for a fresh run.
+    fn reset_state(&mut self) {
+        self.instruction_count = 0;
+        self.stop_reason = EmulatorStop::Running;
+        self.stdout_buf.clear();
+        self.stderr_buf.clear();
+        self.fds.clear();
+        self.next_fd = 3;
+        self.brk_current = HEAP_BASE;
+        self.mmap_next = 0x4000_0000;
+    }
+
     /// Run the loaded ELF binary to completion or stop condition.
+    ///
+    /// Only supports statically-linked ELF binaries. Dynamic binaries
+    /// (those requiring ld-linux or shared libraries) will fail early.
     pub fn run(&mut self) -> Result<EmulatorStop> {
+        self.reset_state();
+
         let path = self
             .elf_path
             .as_ref()
@@ -260,6 +284,8 @@ impl Emulator {
 
     /// Run raw shellcode (no ELF loading).
     pub fn run_shellcode(&mut self, code: &[u8], base: u64) -> Result<EmulatorStop> {
+        self.reset_state();
+
         let mut uc = Unicorn::new(Arch::X86, Mode::MODE_64)
             .map_err(|e| Error::Other(format!("unicorn init: {:?}", e)))?;
 
@@ -603,7 +629,7 @@ impl Emulator {
         if addr == 0 {
             return self.brk_current as i64;
         }
-        if addr >= HEAP_BASE && addr < HEAP_BASE + HEAP_SIZE {
+        if (HEAP_BASE..HEAP_BASE + HEAP_SIZE).contains(&addr) {
             self.brk_current = addr;
             return addr as i64;
         }

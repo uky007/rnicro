@@ -21,10 +21,13 @@ A Linux x86\_64 debugger and exploit development toolkit written in Rust, specia
 ```bash
 cargo install rnicro
 
-# CLI debugger
+# CLI debugger (Linux only — ptrace)
 rnicro ./target/debug/my_program
 
-# DAP mode (for editors)
+# Emulator mode (any platform — static ELF / shellcode)
+rnicro --emulate ./static_binary
+
+# DAP mode (for editors, Linux only)
 rnicro --dap
 ```
 
@@ -36,7 +39,7 @@ rnicro --dap
 | Debug Info | `elf`, `dwarf`, `variables`, `rust_type`, `unwind`, `disasm` |
 | Recon | `checksec`, `strings`, `entropy`, `antidebug`, `memscan`, `syscall_trace` |
 | Exploit | `rop`, `rop_chain`, `one_gadget`, `sigrop`, `fmtstr`, `shellcode`, `heap`, `heap_exploit` |
-| Automation | `event_log`, `antianalysis`, `secret_scan` |
+| Automation | `event_log`, `antianalysis`, `secret_scan`, `emulator` |
 | Integration | `dap_server`, `gdb_rsp`, `tube` |
 
 ## Anti-Analysis Bypass
@@ -60,7 +63,8 @@ Automatically scans writable memory on sensitive syscalls (write, sendto) using:
 
 ## Platform
 
-- **Target**: Linux x86\_64 (ptrace, /proc)
+- **Debugger (ptrace)**: Linux x86\_64 only
+- **Emulator**: Any platform (macOS, Linux) — static ELF and shellcode only; dynamic binaries (glibc, shared libs) require ptrace mode
 - **Development**: macOS compatible (Linux-only modules behind `#[cfg(target_os = "linux")]`)
 
 ## License

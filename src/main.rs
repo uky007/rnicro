@@ -1,12 +1,71 @@
 #[cfg(not(target_os = "linux"))]
-fn main() {
-    eprintln!("rnicro requires Linux (ptrace). This binary was built for a non-Linux target.");
+fn main() -> anyhow::Result<()> {
+    // On non-Linux, only emulator mode is available
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--emulate") {
+        let program = args.iter().skip(1).find(|a| !a.starts_with('-'));
+        if let Some(path) = program {
+            return emulate::run_emulator(std::path::Path::new(path));
+        }
+    }
+    eprintln!("rnicro: ptrace mode requires Linux.");
+    eprintln!("        use --emulate <binary> for emulator mode (available on all platforms).");
     std::process::exit(1);
 }
 
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
     linux::run()
+}
+
+mod emulate {
+    use std::path::Path;
+    use rnicro::emulator::{Emulator, EmulatorStop};
+
+    pub fn run_emulator(path: &Path) -> anyhow::Result<()> {
+        eprintln!("rnicro emulator: loading {}", path.display());
+        let mut emu = Emulator::new()?;
+        emu.load_elf(path)?;
+        let result = emu.run()?;
+
+        // Print captured output
+        if !emu.stdout().is_empty() {
+            let text = String::from_utf8_lossy(emu.stdout());
+            print!("{}", text);
+        }
+        if !emu.stderr().is_empty() {
+            let text = String::from_utf8_lossy(emu.stderr());
+            eprint!("{}", text);
+        }
+
+        // Print summary
+        eprintln!("\n--- emulator summary ---");
+        eprintln!("instructions: {}", emu.instruction_count());
+        match &result {
+            EmulatorStop::Exited(code) => eprintln!("exit code: {}", code),
+            EmulatorStop::InstructionLimit(n) => eprintln!("stopped: instruction limit ({})", n),
+            EmulatorStop::Breakpoint(addr) => eprintln!("stopped: breakpoint at 0x{:x}", addr),
+            EmulatorStop::Error(e) => eprintln!("error: {}", e),
+            EmulatorStop::Running => {}
+        }
+
+        // Print event log
+        let log = emu.event_log();
+        if !log.is_empty() {
+            eprintln!("events: {}", log.len());
+        }
+
+        // Print secrets
+        let secrets = emu.secret_scanner().findings();
+        if !secrets.is_empty() {
+            eprintln!("secrets found: {}", secrets.len());
+            for s in &secrets {
+                eprintln!("  [{}] {} at {}", s.category, s.preview, s.addr);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -35,6 +94,10 @@ mod linux {
         #[arg(long)]
         dap: bool,
 
+        /// Run in emulator mode (no ptrace, works on any platform)
+        #[arg(long)]
+        emulate: bool,
+
         /// Arguments to pass to the program
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
@@ -42,6 +105,15 @@ mod linux {
 
     pub fn run() -> anyhow::Result<()> {
         let cli = Cli::parse();
+
+        if cli.emulate {
+            if let Some(ref program) = cli.program {
+                return crate::emulate::run_emulator(program);
+            } else {
+                eprintln!("error: --emulate requires a program path");
+                std::process::exit(1);
+            }
+        }
 
         if cli.dap {
             let mut dap = rnicro::dap_server::DapServer::new_stdio();
