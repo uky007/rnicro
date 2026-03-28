@@ -3,6 +3,15 @@ name = "rnicro"
 version = "0.1.0"
 edition = "2021"
 description = "A Linux x86_64 debugger and exploit development toolkit written in Rust"
+license = "MIT"
+repository = "https://github.com/uky007/rnicro"
+homepage = "https://github.com/uky007/rnicro"
+documentation = "https://docs.rs/rnicro"
+readme = "README.md"
+keywords = ["debugger", "exploit", "security", "ptrace", "reverse-engineering"]
+categories = ["development-tools::debugging", "command-line-utilities"]
+authors = ["uky"]
+exclude = ["editors/code/node_modules/", "editors/code/package-lock.json", "target/"]
 
 [dependencies]
 # Process control (ptrace, signals, fork/exec)

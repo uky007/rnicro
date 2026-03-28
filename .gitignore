@@ -1,3 +1,4 @@
 /target
 editors/code/out/
 editors/code/node_modules/
+editors/code/package-lock.json
