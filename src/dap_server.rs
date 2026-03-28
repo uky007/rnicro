@@ -963,9 +963,12 @@ impl<R: Read, W: Write> DapServer<R, W> {
             }
         };
 
-        let addr = parse_address(&args.memory_reference);
+        let addr = match parse_address(&args.memory_reference) {
+            Ok(a) => a,
+            Err(e) => { self.send_error(seq, &e); return Ok(()); }
+        };
         let offset = args.instruction_offset.unwrap_or(0) as i64;
-        let count = args.instruction_count as usize;
+        let count = (args.instruction_count as usize).min(MAX_INSTRUCTION_COUNT);
         let start = if offset >= 0 {
             addr + offset as u64
         } else {
@@ -1017,14 +1020,17 @@ impl<R: Read, W: Write> DapServer<R, W> {
             }
         };
 
-        let addr = parse_address(&args.memory_reference);
+        let addr = match parse_address(&args.memory_reference) {
+            Ok(a) => a,
+            Err(e) => { self.send_error(seq, &e); return Ok(()); }
+        };
         let offset = args.offset.unwrap_or(0) as i64;
         let start = if offset >= 0 {
             addr + offset as u64
         } else {
             addr.saturating_sub((-offset) as u64)
         };
-        let count = args.count as usize;
+        let count = (args.count as usize).min(MAX_MEMORY_REQUEST);
 
         match target.read_memory(VirtAddr(start), count) {
             Ok(data) => {
@@ -1059,7 +1065,10 @@ impl<R: Read, W: Write> DapServer<R, W> {
             }
         };
 
-        let addr = parse_address(&args.memory_reference);
+        let addr = match parse_address(&args.memory_reference) {
+            Ok(a) => a,
+            Err(e) => { self.send_error(seq, &e); return Ok(()); }
+        };
         let offset = args.offset.unwrap_or(0) as i64;
         let start = if offset >= 0 {
             addr + offset as u64
@@ -1114,7 +1123,18 @@ impl<R: Read, W: Write> DapServer<R, W> {
             self.next_bp_id += 1;
 
             if let Some(ref mut target) = self.target {
-                let addr = parse_address(&dbp.data_id);
+                let addr = match parse_address(&dbp.data_id) {
+                    Ok(a) => a,
+                    Err(_) => {
+                        result_bps.push(Breakpoint {
+                            id: Some(bp_id),
+                            verified: false,
+                            message: Some(format!("invalid address: {}", dbp.data_id)),
+                            ..Default::default()
+                        });
+                        continue;
+                    }
+                };
                 let wp_type = match dbp.access_type {
                     Some(dap::types::DataBreakpointAccessType::Write) => WatchpointType::Write,
                     Some(dap::types::DataBreakpointAccessType::Read) => WatchpointType::ReadWrite,
@@ -1182,7 +1202,18 @@ impl<R: Read, W: Write> DapServer<R, W> {
             self.next_bp_id += 1;
 
             if let Some(ref mut target) = self.target {
-                let addr = parse_address(&ib.instruction_reference);
+                let addr = match parse_address(&ib.instruction_reference) {
+                    Ok(a) => a,
+                    Err(_) => {
+                        result_bps.push(Breakpoint {
+                            id: Some(bp_id),
+                            verified: false,
+                            message: Some(format!("invalid address: {}", ib.instruction_reference)),
+                            ..Default::default()
+                        });
+                        continue;
+                    }
+                };
                 let offset = ib.offset.unwrap_or(0);
                 let start = if offset >= 0 {
                     addr + offset as u64
@@ -1654,10 +1685,18 @@ fn stopped_reason_from_str(s: &str) -> dap::types::StoppedEventReason {
     }
 }
 
+/// Maximum bytes allowed for a single memory read/write or disassembly request.
+/// Prevents DoS via oversized allocations from untrusted DAP input.
+const MAX_MEMORY_REQUEST: usize = 16 * 1024 * 1024; // 16 MB
+
+/// Maximum instruction count for disassembly requests.
+const MAX_INSTRUCTION_COUNT: usize = 10_000;
+
 /// Parse a hex address string (with optional "0x" prefix) to u64.
-fn parse_address(s: &str) -> u64 {
+/// Returns an error for malformed input instead of silently falling back to 0.
+fn parse_address(s: &str) -> std::result::Result<u64, String> {
     let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
-    u64::from_str_radix(s, 16).unwrap_or(0)
+    u64::from_str_radix(s, 16).map_err(|_| format!("invalid address: {:?}", s))
 }
 
 /// Map a StopReason to a DAP stopped reason string.
@@ -1896,10 +1935,12 @@ mod tests {
 
     #[test]
     fn parse_address_hex() {
-        assert_eq!(parse_address("0x401000"), 0x401000);
-        assert_eq!(parse_address("0X401000"), 0x401000);
-        assert_eq!(parse_address("401000"), 0x401000);
-        assert_eq!(parse_address("0"), 0);
+        assert_eq!(parse_address("0x401000").unwrap(), 0x401000);
+        assert_eq!(parse_address("0X401000").unwrap(), 0x401000);
+        assert_eq!(parse_address("401000").unwrap(), 0x401000);
+        assert_eq!(parse_address("0").unwrap(), 0);
+        assert!(parse_address("not_hex").is_err());
+        assert!(parse_address("").is_err());
     }
 
     #[test]

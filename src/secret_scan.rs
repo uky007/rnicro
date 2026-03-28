@@ -575,13 +575,22 @@ fn scan_known_patterns(data: &[u8], base_addr: u64) -> Vec<SecretFinding> {
     findings
 }
 
-/// Truncate a string for preview display.
+/// Truncate and mask a string for preview display.
+///
+/// Shows the first `reveal` chars, masks the middle with asterisks, and
+/// shows the last `reveal` chars. This prevents the debugger itself from
+/// becoming a secret leakage surface.
 fn truncate_preview(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len])
+    let reveal = 4; // chars to show at each end
+    if s.len() <= reveal * 2 + 4 || s.len() <= 12 {
+        // Too short to meaningfully mask — just truncate
+        if s.len() <= max_len {
+            return s.to_string();
+        }
+        return format!("{}...", &s[..max_len.min(s.len())]);
     }
+    let end_start = s.len().saturating_sub(reveal);
+    format!("{}****{}", &s[..reveal], &s[end_start..])
 }
 
 /// Format bytes as a hex preview string.
@@ -700,13 +709,14 @@ mod tests {
 
         let findings = scanner.scan_region(0x1000, &data2, &mut log);
 
-        // The new string should be detected
+        // The new string should be detected (preview is masked)
         let new_strings: Vec<_> = findings
             .iter()
             .filter(|f| f.category == SecretCategory::NewString)
             .collect();
         assert_eq!(new_strings.len(), 1);
-        assert!(new_strings[0].preview.contains("SecretKey"));
+        assert!(new_strings[0].preview.starts_with("Secr")); // first 4 chars visible
+        assert!(new_strings[0].preview.contains("****")); // middle masked
     }
 
     #[test]
@@ -715,11 +725,13 @@ mod tests {
     }
 
     #[test]
-    fn truncate_preview_long() {
-        let long = "a".repeat(100);
-        let preview = truncate_preview(&long, 20);
-        assert_eq!(preview.len(), 23); // 20 + "..."
-        assert!(preview.ends_with("..."));
+    fn truncate_preview_long_masked() {
+        let long = "AKIA1234567890abcdefghij";
+        let preview = truncate_preview(&long, 60);
+        // Should show first 4 and last 4 with masking
+        assert!(preview.starts_with("AKIA"));
+        assert!(preview.contains("****"));
+        assert!(preview.ends_with("ghij"));
     }
 
     #[test]

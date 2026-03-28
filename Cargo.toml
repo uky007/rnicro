@@ -11,7 +11,7 @@ readme = "README.md"
 keywords = ["debugger", "exploit", "security", "ptrace", "reverse-engineering"]
 categories = ["development-tools::debugging", "command-line-utilities"]
 authors = ["uky"]
-exclude = ["editors/code/node_modules/", "editors/code/package-lock.json", "target/"]
+include = ["src/**/*.rs", "Cargo.toml", "LICENSE", "README.md"]
 
 [dependencies]
 # Process control (ptrace, signals, fork/exec)

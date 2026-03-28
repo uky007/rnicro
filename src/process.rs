@@ -108,9 +108,11 @@ impl Process {
         })?)
         .map_err(|e| Error::Process(e.to_string()))?;
 
-        let c_args: Vec<CString> = std::iter::once(prog.clone())
-            .chain(args.iter().map(|a| CString::new(*a).unwrap()))
-            .collect();
+        let c_args: Vec<CString> = std::iter::once(Ok(prog.clone()))
+            .chain(args.iter().map(|a| {
+                CString::new(*a).map_err(|e| Error::Process(format!("invalid argument: {}", e)))
+            }))
+            .collect::<Result<Vec<_>>>()?;
         let c_args_ref: Vec<&std::ffi::CStr> = c_args.iter().map(|a| a.as_c_str()).collect();
 
         // Pipe for synchronization: child notifies parent after traceme
@@ -373,8 +375,19 @@ impl Process {
     }
 
     /// Read arbitrary bytes from tracee memory via /proc/pid/mem.
+    /// Maximum single read size (16 MB) to prevent accidental OOM.
+    const MAX_READ_SIZE: usize = 16 * 1024 * 1024;
+
     pub fn read_memory(&self, addr: VirtAddr, len: usize) -> Result<Vec<u8>> {
         use std::io::{Read, Seek, SeekFrom};
+
+        if len > Self::MAX_READ_SIZE {
+            return Err(Error::Process(format!(
+                "read_memory: requested {} bytes exceeds {} byte limit",
+                len,
+                Self::MAX_READ_SIZE
+            )));
+        }
 
         let mut file = std::fs::File::open(format!("/proc/{}/mem", self.pid))
             .map_err(|e| Error::Process(format!("/proc/pid/mem: {}", e)))?;

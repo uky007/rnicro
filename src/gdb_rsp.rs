@@ -131,9 +131,11 @@ pub fn handle_command(cmd: &str, handler: &mut dyn GdbHandler) -> String {
         b'm' => {
             // Read memory: m<addr>,<length>
             if let Some((addr_str, len_str)) = cmd[1..].split_once(',') {
+                const MAX_GDB_READ: usize = 16 * 1024 * 1024;
                 if let (Some(addr), Some(len)) = (parse_hex_addr(addr_str), parse_hex_addr(len_str))
                 {
-                    match handler.read_memory(addr, len as usize) {
+                    let len = (len as usize).min(MAX_GDB_READ);
+                    match handler.read_memory(addr, len) {
                         Ok(data) => bytes_to_hex(&data),
                         Err(_) => error_response(1),
                     }

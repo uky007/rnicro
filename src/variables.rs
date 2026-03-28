@@ -797,7 +797,7 @@ pub fn format_value(data: &[u8], type_info: &TypeInfo) -> String {
                 };
                 format!("union {{ {}: {} }}", m.name, val)
             } else {
-                format!("union {{}}")
+                "union {}".to_string()
             }
         }
         TypeKind::Enum {
@@ -919,7 +919,7 @@ mod tests {
             byte_size: 4,
             kind: TypeKind::Float,
         };
-        let val = format_value(&3.14f32.to_le_bytes(), &ti);
+        let val = format_value(&std::f32::consts::PI.to_le_bytes(), &ti);
         assert!(val.starts_with("3.14"));
     }
 
@@ -941,7 +941,7 @@ mod tests {
             byte_size: 1,
             kind: TypeKind::Char,
         };
-        assert_eq!(format_value(&[b'A'], &ti), "'A'");
+        assert_eq!(format_value(b"A", &ti), "'A'");
         assert_eq!(format_value(&[0x01], &ti), "'\\x01'");
     }
 

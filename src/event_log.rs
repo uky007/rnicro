@@ -180,7 +180,7 @@ impl Default for EventLogConfig {
     fn default() -> Self {
         Self {
             categories: HashSet::new(), // empty = log everything
-            max_events: 0,
+            max_events: 100_000,        // prevent unbounded growth
             excluded_syscalls: HashSet::new(),
         }
     }
@@ -311,20 +311,22 @@ impl EventLog {
     }
 
     /// Export events as a JSON array string.
+    ///
+    /// Uses serde_json for correct escaping of all special characters
+    /// (newlines, quotes, backslashes, control chars, etc.).
     pub fn export_json(&self) -> String {
-        let entries: Vec<String> = self
+        let entries: Vec<serde_json::Value> = self
             .events
             .iter()
             .map(|e| {
-                format!(
-                    r#"{{"seq":{},"elapsed_ms":{},"event":"{}"}}"#,
-                    e.seq,
-                    e.elapsed.as_millis(),
-                    e.kind.format_oneline().replace('"', "\\\""),
-                )
+                serde_json::json!({
+                    "seq": e.seq,
+                    "elapsed_ms": e.elapsed.as_millis() as u64,
+                    "event": e.kind.format_oneline(),
+                })
             })
             .collect();
-        format!("[{}]", entries.join(","))
+        serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into())
     }
 }
 
