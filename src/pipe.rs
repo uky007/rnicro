@@ -47,13 +47,14 @@ impl Channel {
     /// Called by the parent process to wait for the child's `traceme`.
     pub fn wait(&self) -> Result<()> {
         let mut buf = [0u8; 1];
-        let ret =
-            unsafe { libc::read(self.read_fd, buf.as_mut_ptr() as *mut libc::c_void, 1) };
+        let ret = unsafe { libc::read(self.read_fd, buf.as_mut_ptr() as *mut libc::c_void, 1) };
         if ret == -1 {
             return Err(Error::Process("pipe wait failed".into()));
         }
         if ret == 0 {
-            return Err(Error::Process("pipe closed unexpectedly (child failed?)".into()));
+            return Err(Error::Process(
+                "pipe closed unexpectedly (child failed?)".into(),
+            ));
         }
         Ok(())
     }

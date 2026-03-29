@@ -12,8 +12,8 @@ use std::path::Path;
 use std::rc::Rc;
 
 use gimli::{
-    AttributeValue, DebuggingInformationEntry, DwAt, DwTag, EndianRcSlice, Encoding,
-    Reader, RunTimeEndian, Unit, UnitOffset,
+    AttributeValue, DebuggingInformationEntry, DwAt, DwTag, Encoding, EndianRcSlice, Reader,
+    RunTimeEndian, Unit, UnitOffset,
 };
 use object::{Object, ObjectSection};
 
@@ -105,10 +105,9 @@ pub struct VariableReader {
 impl VariableReader {
     /// Load DWARF info for variable reading.
     pub fn load(path: &Path) -> Result<Self> {
-        let data = std::fs::read(path)
-            .map_err(|e| Error::Other(format!("read ELF: {}", e)))?;
-        let obj = object::File::parse(&*data)
-            .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+        let data = std::fs::read(path).map_err(|e| Error::Other(format!("read ELF: {}", e)))?;
+        let obj =
+            object::File::parse(&*data).map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
 
         let dwarf = gimli::Dwarf::load(
             |section_id| -> std::result::Result<GimliReader, gimli::Error> {
@@ -132,8 +131,9 @@ impl VariableReader {
         let mut vars = Vec::new();
         let mut units = self.dwarf.units();
 
-        while let Some(header) =
-            units.next().map_err(|e| Error::Other(format!("DWARF units: {}", e)))?
+        while let Some(header) = units
+            .next()
+            .map_err(|e| Error::Other(format!("DWARF units: {}", e)))?
         {
             let unit = self
                 .dwarf
@@ -151,8 +151,9 @@ impl VariableReader {
             let mut depth: isize = 0;
             let mut in_scope = false;
 
-            while let Some((delta, entry)) =
-                entries.next_dfs().map_err(|e| Error::Other(format!("DIE iter: {}", e)))?
+            while let Some((delta, entry)) = entries
+                .next_dfs()
+                .map_err(|e| Error::Other(format!("DIE iter: {}", e)))?
             {
                 depth += delta;
 
@@ -184,8 +185,9 @@ impl VariableReader {
     /// Check if a compile unit contains a given PC.
     fn unit_contains_pc(&self, unit: &Unit<GimliReader>, pc: u64) -> Result<bool> {
         let mut entries = unit.entries();
-        if let Some((_, entry)) =
-            entries.next_dfs().map_err(|e| Error::Other(format!("CU root: {}", e)))?
+        if let Some((_, entry)) = entries
+            .next_dfs()
+            .map_err(|e| Error::Other(format!("CU root: {}", e)))?
         {
             return self.die_contains_pc(entry, unit, pc);
         }
@@ -254,7 +256,10 @@ impl VariableReader {
             Some(attr) => match attr.value() {
                 AttributeValue::Exprloc(expr) => {
                     let reader = expr.0;
-                    reader.to_slice().map_err(|e| Error::Other(format!("expr slice: {}", e)))?.to_vec()
+                    reader
+                        .to_slice()
+                        .map_err(|e| Error::Other(format!("expr slice: {}", e)))?
+                        .to_vec()
                 }
                 _ => return Ok(None), // Location lists not supported yet
             },
@@ -267,9 +272,7 @@ impl VariableReader {
             .map_err(|e| Error::Other(format!("attr: {}", e)))?
         {
             Some(attr) => match attr.value() {
-                AttributeValue::UnitRef(offset) => {
-                    self.resolve_type(unit, offset, encoding, 0)?
-                }
+                AttributeValue::UnitRef(offset) => self.resolve_type(unit, offset, encoding, 0)?,
                 _ => TypeInfo {
                     name: "<unknown>".into(),
                     byte_size: 0,
@@ -453,8 +456,9 @@ impl VariableReader {
             .map_err(|e| Error::Other(format!("tree root: {}", e)))?;
         let mut children = root.children();
 
-        while let Some(child) =
-            children.next().map_err(|e| Error::Other(format!("child: {}", e)))?
+        while let Some(child) = children
+            .next()
+            .map_err(|e| Error::Other(format!("child: {}", e)))?
         {
             let entry = child.entry();
             if entry.tag() == DwTag(0x0d) {
@@ -500,8 +504,9 @@ impl VariableReader {
             .map_err(|e| Error::Other(format!("tree root: {}", e)))?;
         let mut children = root.children();
 
-        while let Some(child) =
-            children.next().map_err(|e| Error::Other(format!("child: {}", e)))?
+        while let Some(child) = children
+            .next()
+            .map_err(|e| Error::Other(format!("child: {}", e)))?
         {
             if child.entry().tag() == DwTag(0x21) {
                 // DW_TAG_variant_part
@@ -534,8 +539,9 @@ impl VariableReader {
             .map_err(|e| Error::Other(format!("tree root: {}", e)))?;
         let mut struct_children = root.children();
 
-        while let Some(child) =
-            struct_children.next().map_err(|e| Error::Other(format!("child: {}", e)))?
+        while let Some(child) = struct_children
+            .next()
+            .map_err(|e| Error::Other(format!("child: {}", e)))?
         {
             let entry = child.entry();
             if entry.tag() != DwTag(0x21) {
@@ -657,11 +663,15 @@ impl VariableReader {
                     .debug_str
                     .get_str(offset)
                     .map_err(|e| Error::Other(format!("debug_str: {}", e)))?;
-                let cow = s.to_string_lossy().map_err(|e| Error::Other(format!("str: {}", e)))?;
+                let cow = s
+                    .to_string_lossy()
+                    .map_err(|e| Error::Other(format!("str: {}", e)))?;
                 Ok(cow.to_string())
             }
             AttributeValue::String(s) => {
-                let cow = s.to_string_lossy().map_err(|e| Error::Other(format!("str: {}", e)))?;
+                let cow = s
+                    .to_string_lossy()
+                    .map_err(|e| Error::Other(format!("str: {}", e)))?;
                 Ok(cow.to_string())
             }
             _ => Ok(String::new()),
@@ -671,8 +681,9 @@ impl VariableReader {
     /// Get the encoding for expression evaluation.
     pub fn encoding_for_pc(&self, pc: u64) -> Result<Encoding> {
         let mut units = self.dwarf.units();
-        while let Some(header) =
-            units.next().map_err(|e| Error::Other(format!("units: {}", e)))?
+        while let Some(header) = units
+            .next()
+            .map_err(|e| Error::Other(format!("units: {}", e)))?
         {
             let unit = self
                 .dwarf
@@ -715,14 +726,8 @@ pub fn format_value(data: &[u8], type_info: &TypeInfo) -> String {
             _ => format_hex(bytes),
         },
         TypeKind::Float => match size {
-            4 => format!(
-                "{}",
-                f32::from_le_bytes(bytes[..4].try_into().unwrap())
-            ),
-            8 => format!(
-                "{}",
-                f64::from_le_bytes(bytes[..8].try_into().unwrap())
-            ),
+            4 => format!("{}", f32::from_le_bytes(bytes[..4].try_into().unwrap())),
+            8 => format!("{}", f64::from_le_bytes(bytes[..8].try_into().unwrap())),
             _ => format_hex(bytes),
         },
         TypeKind::Bool => {

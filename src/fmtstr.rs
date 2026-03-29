@@ -134,10 +134,7 @@ pub fn write_payload(config: &FmtStrConfig, writes: &[FmtWrite]) -> Result<Vec<u
 }
 
 /// Standard payload: addresses first, then format specifiers (for x86).
-fn generate_standard_payload(
-    config: &FmtStrConfig,
-    byte_writes: &[(u64, u8)],
-) -> Result<Vec<u8>> {
+fn generate_standard_payload(config: &FmtStrConfig, byte_writes: &[(u64, u8)]) -> Result<Vec<u8>> {
     let num_writes = byte_writes.len();
     let mut payload = Vec::new();
 
@@ -169,10 +166,7 @@ fn generate_standard_payload(
 }
 
 /// Null-free payload: format specifiers first, addresses at end (for x86_64).
-fn generate_null_free_payload(
-    config: &FmtStrConfig,
-    byte_writes: &[(u64, u8)],
-) -> Result<Vec<u8>> {
+fn generate_null_free_payload(config: &FmtStrConfig, byte_writes: &[(u64, u8)]) -> Result<Vec<u8>> {
     let num_writes = byte_writes.len();
 
     // Two-pass approach: estimate format string length, then generate
@@ -303,7 +297,11 @@ mod tests {
     #[test]
     fn standard_write() {
         let config = FmtStrConfig::x86(10);
-        let writes = vec![FmtWrite { address: 0x08041234, value: 0x42, num_bytes: 1 }];
+        let writes = vec![FmtWrite {
+            address: 0x08041234,
+            value: 0x42,
+            num_bytes: 1,
+        }];
         let payload = write_payload(&config, &writes).unwrap();
         assert!(!payload.is_empty());
         // Address appears at the start (little-endian)
@@ -316,11 +314,18 @@ mod tests {
     #[test]
     fn null_free_write() {
         let config = FmtStrConfig::x86_64(6);
-        let writes = vec![FmtWrite { address: 0x00601020, value: 0x41, num_bytes: 1 }];
+        let writes = vec![FmtWrite {
+            address: 0x00601020,
+            value: 0x41,
+            num_bytes: 1,
+        }];
         let payload = write_payload(&config, &writes).unwrap();
         // Address should be at the END in null-free mode
         let addr_bytes = &payload[payload.len() - 8..];
-        assert_eq!(u64::from_le_bytes(addr_bytes.try_into().unwrap()), 0x00601020);
+        assert_eq!(
+            u64::from_le_bytes(addr_bytes.try_into().unwrap()),
+            0x00601020
+        );
         let fmt_part = String::from_utf8_lossy(&payload[..payload.len() - 8]);
         assert!(fmt_part.contains("$hhn"));
     }
@@ -328,7 +333,11 @@ mod tests {
     #[test]
     fn multi_byte_write() {
         let config = FmtStrConfig::x86_64(6);
-        let writes = vec![FmtWrite { address: 0x00601020, value: 0x4142, num_bytes: 2 }];
+        let writes = vec![FmtWrite {
+            address: 0x00601020,
+            value: 0x4142,
+            num_bytes: 2,
+        }];
         let payload = write_payload(&config, &writes).unwrap();
         // Should have 2 addresses (8 bytes each) at the end
         assert!(payload.len() >= 16);

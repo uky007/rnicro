@@ -139,11 +139,7 @@ impl BreakpointManager {
     /// Step over a breakpoint: disable it, single-step, then re-enable.
     ///
     /// The caller must have already set RIP back to the breakpoint address.
-    pub fn step_over_breakpoint(
-        &mut self,
-        proc: &mut Process,
-        addr: VirtAddr,
-    ) -> Result<()> {
+    pub fn step_over_breakpoint(&mut self, proc: &mut Process, addr: VirtAddr) -> Result<()> {
         if let Some(site) = self.sites.get_mut(&addr.addr()) {
             if site.is_enabled() {
                 site.disable(proc)?;

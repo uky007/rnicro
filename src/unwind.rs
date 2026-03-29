@@ -8,8 +8,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use gimli::{BaseAddresses, CfaRule, EhFrame, EndianRcSlice, Register, RegisterRule,
-            RunTimeEndian, UnwindContext, UnwindSection};
+use gimli::{
+    BaseAddresses, CfaRule, EhFrame, EndianRcSlice, Register, RegisterRule, RunTimeEndian,
+    UnwindContext, UnwindSection,
+};
 use object::{Object, ObjectSection};
 
 use crate::error::{Error, Result};
@@ -35,8 +37,8 @@ pub struct Unwinder {
 impl Unwinder {
     /// Load `.eh_frame` from an ELF binary.
     pub fn load(path: &Path) -> Result<Self> {
-        let data = std::fs::read(path)
-            .map_err(|e| Error::Other(format!("read ELF for unwind: {}", e)))?;
+        let data =
+            std::fs::read(path).map_err(|e| Error::Other(format!("read ELF for unwind: {}", e)))?;
         let obj = object::File::parse(&*data)
             .map_err(|e| Error::Other(format!("parse ELF for unwind: {}", e)))?;
 
@@ -82,8 +84,10 @@ impl Unwinder {
     ) -> Result<Vec<UnwindFrame>> {
         let mut frames = Vec::new();
         let mut pc = initial_pc;
-        let mut regs: HashMap<Register, u64> =
-            initial_regs.iter().map(|&(r, v)| (Register(r), v)).collect();
+        let mut regs: HashMap<Register, u64> = initial_regs
+            .iter()
+            .map(|&(r, v)| (Register(r), v))
+            .collect();
         let mut ctx = UnwindContext::new();
 
         for depth in 0..256 {
@@ -107,15 +111,12 @@ impl Unwinder {
                 Err(_) => break,
             };
 
-            let row = match fde.unwind_info_for_address(
-                &self.eh_frame,
-                &self.bases,
-                &mut ctx,
-                lookup_pc,
-            ) {
-                Ok(row) => row,
-                Err(_) => break,
-            };
+            let row =
+                match fde.unwind_info_for_address(&self.eh_frame, &self.bases, &mut ctx, lookup_pc)
+                {
+                    Ok(row) => row,
+                    Err(_) => break,
+                };
 
             // Compute CFA (Canonical Frame Address)
             let cfa = match row.cfa() {
@@ -160,10 +161,8 @@ impl Unwinder {
                     RegisterRule::Offset(offset) => {
                         let addr = (cfa as i64 + offset) as u64;
                         if let Ok(bytes) = read_memory(addr, 8) {
-                            new_regs.insert(
-                                reg,
-                                u64::from_le_bytes(bytes[..8].try_into().unwrap()),
-                            );
+                            new_regs
+                                .insert(reg, u64::from_le_bytes(bytes[..8].try_into().unwrap()));
                         }
                     }
                     RegisterRule::Register(other) => {
@@ -195,25 +194,22 @@ impl Unwinder {
         initial_regs: &[(u16, u64)],
         read_memory: &dyn Fn(u64, usize) -> Result<Vec<u8>>,
     ) -> Result<Option<u64>> {
-        let regs: HashMap<Register, u64> =
-            initial_regs.iter().map(|&(r, v)| (Register(r), v)).collect();
+        let regs: HashMap<Register, u64> = initial_regs
+            .iter()
+            .map(|&(r, v)| (Register(r), v))
+            .collect();
         let mut ctx = UnwindContext::new();
 
-        let fde = match self.eh_frame.fde_for_address(
-            &self.bases,
-            pc,
-            |section, bases, offset| section.cie_from_offset(bases, offset),
-        ) {
+        let fde = match self
+            .eh_frame
+            .fde_for_address(&self.bases, pc, |section, bases, offset| {
+                section.cie_from_offset(bases, offset)
+            }) {
             Ok(fde) => fde,
             Err(_) => return Ok(None),
         };
 
-        let row = match fde.unwind_info_for_address(
-            &self.eh_frame,
-            &self.bases,
-            &mut ctx,
-            pc,
-        ) {
+        let row = match fde.unwind_info_for_address(&self.eh_frame, &self.bases, &mut ctx, pc) {
             Ok(row) => row,
             Err(_) => return Ok(None),
         };

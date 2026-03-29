@@ -199,8 +199,7 @@ impl Tube {
 
     /// Receive exactly `n` bytes with explicit timeout.
     pub fn recvn_timeout(&mut self, n: usize, timeout_ms: u64) -> Result<Vec<u8>> {
-        let deadline = std::time::Instant::now()
-            + std::time::Duration::from_millis(timeout_ms);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
 
         while self.buffer.len() < n {
             let remaining = deadline
@@ -209,7 +208,8 @@ impl Tube {
             if remaining == 0 {
                 return Err(Error::Other(format!(
                     "recvn timeout: got {} of {} bytes",
-                    self.buffer.len(), n
+                    self.buffer.len(),
+                    n
                 )));
             }
             self.poll_read(remaining)?;
@@ -228,8 +228,7 @@ impl Tube {
 
     /// Receive until delimiter with explicit timeout.
     pub fn recvuntil_timeout(&mut self, delim: &[u8], timeout_ms: u64) -> Result<Vec<u8>> {
-        let deadline = std::time::Instant::now()
-            + std::time::Duration::from_millis(timeout_ms);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
 
         loop {
             if let Some(pos) = find_subsequence(&self.buffer, delim) {
@@ -400,11 +399,17 @@ pub fn cyclic(length: usize) -> Vec<u8> {
         let b = (i / 26) % 26;
         let c = i % 26;
         pattern.push(b'A' + a as u8);
-        if pattern.len() >= length { break; }
+        if pattern.len() >= length {
+            break;
+        }
         pattern.push(b'a' + b as u8);
-        if pattern.len() >= length { break; }
+        if pattern.len() >= length {
+            break;
+        }
         pattern.push(b'a' + c as u8);
-        if pattern.len() >= length { break; }
+        if pattern.len() >= length {
+            break;
+        }
     }
     pattern.truncate(length);
     pattern
@@ -517,7 +522,7 @@ mod tests {
     #[test]
     fn tube_send_recv_via_pipe() {
         // Create a pair of pipes and test tube I/O directly
-        let mut pipe_in = [0i32; 2];  // tube writes, test reads
+        let mut pipe_in = [0i32; 2]; // tube writes, test reads
         let mut pipe_out = [0i32; 2]; // test writes, tube reads
         unsafe {
             libc::pipe(pipe_in.as_mut_ptr());

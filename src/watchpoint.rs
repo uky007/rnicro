@@ -149,13 +149,9 @@ impl WatchpointManager {
         }
 
         // Find a free slot
-        let slot = self
-            .slots
-            .iter()
-            .position(|s| s.is_none())
-            .ok_or_else(|| {
-                Error::Other("no free hardware debug registers (max 4 watchpoints)".into())
-            })?;
+        let slot = self.slots.iter().position(|s| s.is_none()).ok_or_else(|| {
+            Error::Other("no free hardware debug registers (max 4 watchpoints)".into())
+        })?;
 
         // Write address to DR<slot>
         process::write_debug_reg(pid, slot, addr.addr())?;

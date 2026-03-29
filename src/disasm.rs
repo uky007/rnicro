@@ -4,8 +4,10 @@
 //! Provides instruction decoding and formatted output for
 //! examining code in the tracee's memory.
 
-use iced_x86::{Decoder, DecoderOptions, FlowControl, Formatter, FormatterOutput,
-               FormatterTextKind, GasFormatter, IntelFormatter, Instruction};
+use iced_x86::{
+    Decoder, DecoderOptions, FlowControl, Formatter, FormatterOutput, FormatterTextKind,
+    GasFormatter, Instruction, IntelFormatter,
+};
 
 use crate::types::VirtAddr;
 
@@ -64,8 +66,8 @@ pub fn disassemble(
             }
         }
 
-        let insn_bytes = &code[(insn.ip() - base_addr.addr()) as usize..
-                               (insn.ip() - base_addr.addr()) as usize + insn.len()];
+        let insn_bytes = &code[(insn.ip() - base_addr.addr()) as usize
+            ..(insn.ip() - base_addr.addr()) as usize + insn.len()];
 
         results.push(DisasmInstruction {
             addr: VirtAddr(insn.ip()),
@@ -139,7 +141,9 @@ struct FormatterOutputBuffer {
 
 impl FormatterOutputBuffer {
     fn new() -> Self {
-        Self { text: String::new() }
+        Self {
+            text: String::new(),
+        }
     }
 
     fn clear(&mut self) {
@@ -181,9 +185,9 @@ mod tests {
     fn disassemble_push_rbp_sequence() {
         // push rbp; mov rbp, rsp; sub rsp, 0x10
         let code = [
-            0x55,                         // push rbp
-            0x48, 0x89, 0xe5,             // mov rbp, rsp
-            0x48, 0x83, 0xec, 0x10,       // sub rsp, 0x10
+            0x55, // push rbp
+            0x48, 0x89, 0xe5, // mov rbp, rsp
+            0x48, 0x83, 0xec, 0x10, // sub rsp, 0x10
         ];
         let insns = disassemble(&code, VirtAddr(0x401000), 10, DisasmStyle::Intel);
         assert_eq!(insns.len(), 3);

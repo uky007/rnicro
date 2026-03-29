@@ -302,18 +302,14 @@ impl SecretScanner {
 
         // 2. Entropy-based detection
         if self.config.scan_entropy && data.len() >= self.config.entropy_block_size {
-            let blocks =
-                entropy::block_entropy(data, base_addr, self.config.entropy_block_size);
+            let blocks = entropy::block_entropy(data, base_addr, self.config.entropy_block_size);
             let current_entropies: Vec<(u64, f64)> =
                 blocks.iter().map(|b| (b.addr, b.entropy)).collect();
 
             if let Some(prev) = self.previous_snapshots.get(&region_key) {
                 // Detect entropy decrease (potential decryption)
                 for (addr, new_ent) in &current_entropies {
-                    if let Some((_, old_ent)) = prev
-                        .block_entropies
-                        .iter()
-                        .find(|(a, _)| a == addr)
+                    if let Some((_, old_ent)) = prev.block_entropies.iter().find(|(a, _)| a == addr)
                     {
                         let delta = old_ent - new_ent;
                         if delta >= self.config.decryption_entropy_delta
@@ -382,15 +378,17 @@ impl SecretScanner {
 
         // Record findings in event log and dedup store
         for finding in &findings {
-            self.found_secrets.entry(finding.addr.addr()).or_insert_with(|| {
-                event_log.record(EventKind::SecretFound {
-                    addr: finding.addr,
-                    category: finding.category,
-                    preview: finding.preview.clone(),
-                    size: finding.size,
+            self.found_secrets
+                .entry(finding.addr.addr())
+                .or_insert_with(|| {
+                    event_log.record(EventKind::SecretFound {
+                        addr: finding.addr,
+                        category: finding.category,
+                        preview: finding.preview.clone(),
+                        size: finding.size,
+                    });
+                    finding.clone()
                 });
-                finding.clone()
-            });
         }
 
         findings
@@ -553,10 +551,7 @@ fn scan_known_patterns(data: &[u8], base_addr: u64) -> Vec<SecretFinding> {
 
             let match_len = end - i;
             if match_len >= pattern.min_length {
-                let preview = truncate_preview(
-                    &String::from_utf8_lossy(&data[i..end]),
-                    60,
-                );
+                let preview = truncate_preview(&String::from_utf8_lossy(&data[i..end]), 60);
                 findings.push(SecretFinding {
                     addr: VirtAddr(base_addr + i as u64),
                     category: SecretCategory::KnownPattern,
@@ -625,7 +620,9 @@ mod tests {
     #[test]
     fn looks_like_secret_basic() {
         assert!(looks_like_secret("AKIAxyz123ABCdef4567")); // AWS-like key
-        assert!(looks_like_secret("ghp_1234567890abcdefghijklmnopqrstuvwxyz"));
+        assert!(looks_like_secret(
+            "ghp_1234567890abcdefghijklmnopqrstuvwxyz"
+        ));
         assert!(!looks_like_secret("hello")); // too short
         assert!(!looks_like_secret("aaaaaaaaaa")); // all same char
         assert!(!looks_like_secret("        ")); // spaces only

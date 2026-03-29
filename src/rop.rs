@@ -7,8 +7,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use iced_x86::{Decoder, DecoderOptions, FlowControl, Formatter, FormatterOutput,
-               FormatterTextKind, Instruction, IntelFormatter};
+use iced_x86::{
+    Decoder, DecoderOptions, FlowControl, Formatter, FormatterOutput, FormatterTextKind,
+    Instruction, IntelFormatter,
+};
 
 use crate::error::{Error, Result};
 
@@ -44,16 +46,15 @@ pub enum GadgetType {
 /// `max_depth` controls the maximum number of instructions per gadget
 /// (default 5 if 0 is passed).
 pub fn find_gadgets(path: &Path, max_depth: usize) -> Result<Vec<Gadget>> {
-    let data =
-        std::fs::read(path).map_err(|e| Error::Other(format!("read: {}", e)))?;
+    let data = std::fs::read(path).map_err(|e| Error::Other(format!("read: {}", e)))?;
     find_gadgets_bytes(&data, max_depth)
 }
 
 /// Search for ROP gadgets in raw ELF data.
 pub fn find_gadgets_bytes(data: &[u8], max_depth: usize) -> Result<Vec<Gadget>> {
     let max_depth = if max_depth == 0 { 5 } else { max_depth };
-    let elf = goblin::elf::Elf::parse(data)
-        .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+    let elf =
+        goblin::elf::Elf::parse(data).map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
 
     // Collect executable segments
     let mut gadgets: BTreeMap<u64, Gadget> = BTreeMap::new();
@@ -185,12 +186,8 @@ fn try_decode_gadget(
         // Check if this is the ending instruction
         let is_end = match gadget_type {
             GadgetType::Ret => insn.flow_control() == FlowControl::Return,
-            GadgetType::JmpReg => {
-                insn.flow_control() == FlowControl::IndirectBranch
-            }
-            GadgetType::CallReg => {
-                insn.flow_control() == FlowControl::IndirectCall
-            }
+            GadgetType::JmpReg => insn.flow_control() == FlowControl::IndirectBranch,
+            GadgetType::CallReg => insn.flow_control() == FlowControl::IndirectCall,
         };
 
         if is_end {

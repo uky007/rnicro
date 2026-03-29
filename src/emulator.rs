@@ -39,8 +39,8 @@ use unicorn_engine::{RegisterX86, Unicorn};
 
 use crate::disasm::{self, DisasmInstruction, DisasmStyle};
 use crate::error::{Error, Result};
-use crate::event_log::{EventLog, EventKind};
-use crate::secret_scan::{SecretScanner, SecretScanConfig};
+use crate::event_log::{EventKind, EventLog};
+use crate::secret_scan::{SecretScanConfig, SecretScanner};
 use crate::syscall_trace;
 use crate::types::VirtAddr;
 
@@ -236,8 +236,8 @@ impl Emulator {
             .as_ref()
             .ok_or_else(|| Error::Other("no ELF loaded".into()))?
             .clone();
-        let elf_data = std::fs::read(&path)
-            .map_err(|e| Error::Other(format!("read ELF: {}", e)))?;
+        let elf_data =
+            std::fs::read(&path).map_err(|e| Error::Other(format!("read ELF: {}", e)))?;
 
         let elf = goblin::elf::Elf::parse(&elf_data)
             .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
@@ -260,12 +260,8 @@ impl Emulator {
         self.setup_stack(&mut uc, sp, &elf)?;
 
         // Set up heap region
-        uc.mem_map(
-            HEAP_BASE,
-            HEAP_SIZE,
-            Prot::READ | Prot::WRITE,
-        )
-        .map_err(|e| Error::Other(format!("map heap: {:?}", e)))?;
+        uc.mem_map(HEAP_BASE, HEAP_SIZE, Prot::READ | Prot::WRITE)
+            .map_err(|e| Error::Other(format!("map heap: {:?}", e)))?;
 
         // Set initial registers
         uc.reg_write(RegisterX86::RSP, sp)
@@ -309,12 +305,8 @@ impl Emulator {
             .map_err(|e| Error::Other(format!("set RSP: {:?}", e)))?;
 
         // Map heap
-        uc.mem_map(
-            HEAP_BASE,
-            HEAP_SIZE,
-            Prot::READ | Prot::WRITE,
-        )
-        .map_err(|e| Error::Other(format!("map heap: {:?}", e)))?;
+        uc.mem_map(HEAP_BASE, HEAP_SIZE, Prot::READ | Prot::WRITE)
+            .map_err(|e| Error::Other(format!("map heap: {:?}", e)))?;
 
         self.stop_reason = EmulatorStop::Running;
         self.execute_loop(&mut uc, base)?;
@@ -349,10 +341,8 @@ impl Emulator {
             let code = match uc.mem_read_as_vec(pc, 15) {
                 Ok(c) => c,
                 Err(_) => {
-                    self.stop_reason = EmulatorStop::Error(format!(
-                        "cannot read instruction at 0x{:x}",
-                        pc
-                    ));
+                    self.stop_reason =
+                        EmulatorStop::Error(format!("cannot read instruction at 0x{:x}", pc));
                     return Ok(());
                 }
             };
@@ -380,10 +370,8 @@ impl Emulator {
             match result {
                 Ok(()) => {}
                 Err(e) => {
-                    self.stop_reason = EmulatorStop::Error(format!(
-                        "execution error at 0x{:x}: {:?}",
-                        pc, e
-                    ));
+                    self.stop_reason =
+                        EmulatorStop::Error(format!("execution error at 0x{:x}: {:?}", pc, e));
                     return Ok(());
                 }
             }
@@ -447,14 +435,14 @@ impl Emulator {
                 self.sys_open(uc, path_addr)
             }
             SYS_CLOSE => self.sys_close(rdi as i32),
-            SYS_FSTAT => 0,     // Stub: success
+            SYS_FSTAT => 0, // Stub: success
             SYS_MMAP => self.sys_mmap(uc, rdi, rsi, rdx, r10),
-            SYS_MPROTECT => 0,  // Stub: success
-            SYS_MUNMAP => 0,    // Stub: success
+            SYS_MPROTECT => 0, // Stub: success
+            SYS_MUNMAP => 0,   // Stub: success
             SYS_BRK => self.sys_brk(rdi),
             SYS_RT_SIGACTION | SYS_RT_SIGPROCMASK => 0, // Stub: success
-            SYS_IOCTL => -25,   // ENOTTY
-            SYS_ACCESS => -2,   // ENOENT
+            SYS_IOCTL => -25,                           // ENOTTY
+            SYS_ACCESS => -2,                           // ENOENT
             SYS_ALARM => {
                 // Neutralize watchdog timers
                 self.event_log.record(EventKind::AntiDebugDetected {
@@ -509,9 +497,8 @@ impl Emulator {
             SYS_GETRANDOM => self.sys_getrandom(uc, rdi, rsi as usize),
             SYS_EXIT | SYS_EXIT_GROUP => {
                 self.stop_reason = EmulatorStop::Exited(rdi as i32);
-                self.event_log.record(EventKind::ProcessExited {
-                    code: rdi as i32,
-                });
+                self.event_log
+                    .record(EventKind::ProcessExited { code: rdi as i32 });
                 return Ok(());
             }
             _ => {
@@ -601,11 +588,14 @@ impl Emulator {
             );
             let fd = self.next_fd;
             self.next_fd += 1;
-            self.fds.insert(fd, EmulatedFd {
-                path,
-                data: fake_status.into_bytes(),
-                offset: 0,
-            });
+            self.fds.insert(
+                fd,
+                EmulatedFd {
+                    path,
+                    data: fake_status.into_bytes(),
+                    offset: 0,
+                },
+            );
             self.event_log.record(EventKind::AntiDebugDetected {
                 technique: "/proc/self/status check".into(),
                 addr: None,
@@ -622,7 +612,11 @@ impl Emulator {
         if fd <= 2 {
             return 0; // Don't close stdio
         }
-        if self.fds.remove(&fd).is_some() { 0 } else { -9 }
+        if self.fds.remove(&fd).is_some() {
+            0
+        } else {
+            -9
+        }
     }
 
     fn sys_brk(&mut self, addr: u64) -> i64 {
@@ -663,11 +657,11 @@ impl Emulator {
         // struct utsname: 5 fields of 65 bytes each
         let mut data = vec![0u8; 5 * 65];
         let fields = [
-            "Linux",                    // sysname
-            "emulated",                 // nodename
-            "5.15.0-rnicro",            // release
-            "#1 SMP",                   // version
-            "x86_64",                   // machine
+            "Linux",         // sysname
+            "emulated",      // nodename
+            "5.15.0-rnicro", // release
+            "#1 SMP",        // version
+            "x86_64",        // machine
         ];
         for (i, field) in fields.iter().enumerate() {
             let offset = i * 65;
@@ -756,12 +750,7 @@ impl Emulator {
         Ok(())
     }
 
-    fn setup_stack(
-        &self,
-        uc: &mut Unicorn<()>,
-        sp: u64,
-        _elf: &goblin::elf::Elf,
-    ) -> Result<()> {
+    fn setup_stack(&self, uc: &mut Unicorn<()>, sp: u64, _elf: &goblin::elf::Elf) -> Result<()> {
         let mut cursor = sp;
 
         // argc = 1
@@ -843,7 +832,12 @@ impl Emulator {
         count: usize,
     ) -> Result<Vec<DisasmInstruction>> {
         let code = Self::read_memory(uc, addr, count * 15)?;
-        Ok(disasm::disassemble(&code, VirtAddr(addr), count, DisasmStyle::Intel))
+        Ok(disasm::disassemble(
+            &code,
+            VirtAddr(addr),
+            count,
+            DisasmStyle::Intel,
+        ))
     }
 }
 
@@ -1028,7 +1022,7 @@ mod tests {
         let code = [
             0x48, 0xC7, 0xC0, 0x3C, 0x00, 0x00, 0x00, // mov rax, 60
             0x48, 0xC7, 0xC7, 0x2A, 0x00, 0x00, 0x00, // mov rdi, 42
-            0x0F, 0x05,                                 // syscall
+            0x0F, 0x05, // syscall
         ];
         let mut emu = Emulator::new().unwrap();
         let result = emu.run_shellcode(&code, 0x10000).unwrap();
@@ -1086,9 +1080,9 @@ mod tests {
             other => panic!("expected Exited(0), got {:?}", other),
         }
 
-        let bypasses = emu.event_log().events_by_category(
-            crate::event_log::EventCategory::AntiDebug,
-        );
+        let bypasses = emu
+            .event_log()
+            .events_by_category(crate::event_log::EventCategory::AntiDebug);
         assert!(!bypasses.is_empty());
     }
 }

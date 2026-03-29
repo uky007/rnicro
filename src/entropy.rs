@@ -65,15 +65,14 @@ pub fn shannon_entropy(data: &[u8]) -> f64 {
 
 /// Analyze entropy per ELF section.
 pub fn analyze_sections(path: &Path) -> Result<Vec<SectionEntropy>> {
-    let data =
-        std::fs::read(path).map_err(|e| Error::Other(format!("read: {}", e)))?;
+    let data = std::fs::read(path).map_err(|e| Error::Other(format!("read: {}", e)))?;
     analyze_sections_bytes(&data)
 }
 
 /// Analyze entropy per ELF section from raw data.
 pub fn analyze_sections_bytes(data: &[u8]) -> Result<Vec<SectionEntropy>> {
-    let elf = goblin::elf::Elf::parse(data)
-        .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+    let elf =
+        goblin::elf::Elf::parse(data).map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
 
     let mut results = Vec::new();
 
@@ -149,7 +148,11 @@ mod tests {
     fn entropy_all_zeros() {
         let data = vec![0u8; 256];
         let e = shannon_entropy(&data);
-        assert!((e - 0.0).abs() < 0.001, "all-zero entropy should be 0.0, got {}", e);
+        assert!(
+            (e - 0.0).abs() < 0.001,
+            "all-zero entropy should be 0.0, got {}",
+            e
+        );
     }
 
     #[test]

@@ -57,8 +57,8 @@ pub fn checksec(path: &Path) -> Result<ChecksecResult> {
 
 /// Analyze ELF binary data for security mechanisms.
 pub fn checksec_bytes(data: &[u8]) -> Result<ChecksecResult> {
-    let elf = goblin::elf::Elf::parse(data)
-        .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+    let elf =
+        goblin::elf::Elf::parse(data).map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
 
     // --- RELRO ---
     let has_relro = elf

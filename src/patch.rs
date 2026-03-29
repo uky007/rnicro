@@ -13,8 +13,8 @@ use crate::error::{Error, Result};
 /// Searches PT_LOAD segments to find which segment contains the
 /// virtual address and computes the corresponding file offset.
 pub fn vaddr_to_file_offset(data: &[u8], vaddr: u64) -> Result<u64> {
-    let elf = goblin::elf::Elf::parse(data)
-        .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+    let elf =
+        goblin::elf::Elf::parse(data).map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
 
     for ph in &elf.program_headers {
         if ph.p_type != goblin::elf::program_header::PT_LOAD {
@@ -44,8 +44,7 @@ pub fn vaddr_to_file_offset(data: &[u8], vaddr: u64) -> Result<u64> {
 /// Maps the virtual address to a file offset and writes the patch bytes.
 /// The original file is modified in place.
 pub fn patch_file(path: &Path, vaddr: u64, patch_bytes: &[u8]) -> Result<PatchResult> {
-    let data =
-        std::fs::read(path).map_err(|e| Error::Other(format!("read: {}", e)))?;
+    let data = std::fs::read(path).map_err(|e| Error::Other(format!("read: {}", e)))?;
     let file_offset = vaddr_to_file_offset(&data, vaddr)?;
 
     let offset = file_offset as usize;
@@ -63,8 +62,7 @@ pub fn patch_file(path: &Path, vaddr: u64, patch_bytes: &[u8]) -> Result<PatchRe
     // Write the patch
     let mut patched = data;
     patched[offset..offset + patch_bytes.len()].copy_from_slice(patch_bytes);
-    std::fs::write(path, &patched)
-        .map_err(|e| Error::Other(format!("write: {}", e)))?;
+    std::fs::write(path, &patched).map_err(|e| Error::Other(format!("write: {}", e)))?;
 
     Ok(PatchResult {
         file_offset,

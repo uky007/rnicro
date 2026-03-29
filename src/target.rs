@@ -5,12 +5,8 @@
 //! stack unwinding, and source-level stepping into a unified interface
 //! used by the CLI.
 
-use crate::antidebug::{self, AntiDebugFinding, BypassConfig};
 use crate::antianalysis::{BypassAction, BypassEngine, BypassEngineConfig};
-use crate::event_log::{EventLog, EventKind};
-use crate::got_hook::GotHookManager;
-use crate::secret_scan::{SecretScanner, SecretScanConfig};
-use crate::memscan::{self, ScanMatch};
+use crate::antidebug::{self, AntiDebugFinding, BypassConfig};
 use crate::breakpoint::BreakpointManager;
 use crate::checksec::{self, ChecksecResult};
 use crate::disasm::{self, DisasmInstruction, DisasmStyle};
@@ -18,19 +14,23 @@ use crate::dwarf::{DwarfInfo, SourceLocation};
 use crate::elf::{self, ElfFile, GotPltEntry};
 use crate::entropy::{self, SectionEntropy};
 use crate::error::{Error, Result};
+use crate::event_log::{EventKind, EventLog};
+use crate::got_hook::GotHookManager;
+use crate::memscan::{self, ScanMatch};
 use crate::patch::{self, PatchResult};
 use crate::process::Process;
 use crate::procfs::{self, MemoryRegion};
 use crate::registers::{self, Registers};
 use crate::rop::{self, Gadget};
+use crate::rust_type;
+use crate::secret_scan::{SecretScanConfig, SecretScanner};
+use crate::shared_lib::{self, SharedLibrary};
 use crate::strings::{self, ExtractedString};
 use crate::syscall_trace;
 use crate::types::{ProcessState, StopReason, VirtAddr};
 use crate::unwind::Unwinder;
-use crate::rust_type;
 use crate::variables::{self, Variable, VariableReader};
-use crate::watchpoint::{WatchpointManager, WatchpointType, WatchpointSize, Watchpoint};
-use crate::shared_lib::{self, SharedLibrary};
+use crate::watchpoint::{Watchpoint, WatchpointManager, WatchpointSize, WatchpointType};
 
 use nix::sys::signal::Signal;
 use std::collections::{HashMap, HashSet};
@@ -204,11 +204,15 @@ impl Target {
                             String::from_utf8_lossy(&bytes[..end]).into_owned()
                         })
                 };
-                let action =
-                    self.bypass_engine.on_syscall_entry(*number, args, &read_string);
+                let action = self
+                    .bypass_engine
+                    .on_syscall_entry(*number, args, &read_string);
 
                 match action {
-                    BypassAction::RewriteArg { arg_index, new_value } => {
+                    BypassAction::RewriteArg {
+                        arg_index,
+                        new_value,
+                    } => {
                         // Rewrite the syscall argument register
                         if let Ok(mut regs) = self.read_registers() {
                             let reg_name = match arg_index {
@@ -223,8 +227,7 @@ impl Target {
                             if !reg_name.is_empty() {
                                 let _ = regs.set(reg_name, new_value);
                                 let _ = self.write_registers(&regs);
-                                self.bypass_engine
-                                    .record_prctl_bypass(&mut self.event_log);
+                                self.bypass_engine.record_prctl_bypass(&mut self.event_log);
                             }
                         }
                     }
@@ -262,13 +265,10 @@ impl Target {
                             let buf_addr = regs.get("rsi").unwrap_or(0);
                             let count = regs.get("rax").unwrap_or(0) as usize;
                             if buf_addr != 0 && count > 0 {
-                                if let Ok(buf) =
-                                    self.process.read_memory(VirtAddr(buf_addr), count)
+                                if let Ok(buf) = self.process.read_memory(VirtAddr(buf_addr), count)
                                 {
                                     let spoofed = BypassEngine::spoof_tracer_pid(&buf);
-                                    let _ = self
-                                        .process
-                                        .write_memory(VirtAddr(buf_addr), &spoofed);
+                                    let _ = self.process.write_memory(VirtAddr(buf_addr), &spoofed);
                                 }
                             }
                         }
@@ -299,7 +299,8 @@ impl Target {
                     if let Some(cond) = site.condition() {
                         if !self.evaluate_condition(cond) {
                             // Condition is false — step over the breakpoint and continue
-                            self.breakpoints.step_over_breakpoint(&mut self.process, *addr)?;
+                            self.breakpoints
+                                .step_over_breakpoint(&mut self.process, *addr)?;
                             continue;
                         }
                     }
@@ -308,8 +309,7 @@ impl Target {
 
             // Auto-skip INT3 traps that aren't user breakpoints
             if let StopReason::BreakpointHit { addr } = &reason {
-                if self.bypass_engine.should_skip_int3()
-                    && self.breakpoints.get_at(*addr).is_none()
+                if self.bypass_engine.should_skip_int3() && self.breakpoints.get_at(*addr).is_none()
                 {
                     self.bypass_engine
                         .record_int3_skip(*addr, &mut self.event_log);
@@ -325,7 +325,8 @@ impl Target {
     pub fn step_instruction(&mut self) -> Result<StopReason> {
         let pc = VirtAddr(self.read_registers()?.pc());
         if self.breakpoints.get_at(pc).is_some() {
-            self.breakpoints.step_over_breakpoint(&mut self.process, pc)?;
+            self.breakpoints
+                .step_over_breakpoint(&mut self.process, pc)?;
             return Ok(StopReason::SingleStep);
         }
 
@@ -412,11 +413,9 @@ impl Target {
         // Try CFI-based return address first
         let ret_addr = if let Some(unwinder) = &self.unwinder {
             let dwarf_regs = self.dwarf_register_snapshot(&regs);
-            unwinder.return_address(
-                pc,
-                &dwarf_regs,
-                &|addr, len| self.process.read_memory(VirtAddr(addr), len),
-            )?
+            unwinder.return_address(pc, &dwarf_regs, &|addr, len| {
+                self.process.read_memory(VirtAddr(addr), len)
+            })?
         } else {
             None
         };
@@ -464,11 +463,9 @@ impl Target {
             .ok_or_else(|| Error::Other("no unwind info available".into()))?;
 
         let dwarf_regs = self.dwarf_register_snapshot(&regs);
-        let raw_frames = unwinder.walk_stack(
-            pc,
-            &dwarf_regs,
-            &|addr, len| self.process.read_memory(VirtAddr(addr), len),
-        )?;
+        let raw_frames = unwinder.walk_stack(pc, &dwarf_regs, &|addr, len| {
+            self.process.read_memory(VirtAddr(addr), len)
+        })?;
 
         let mut bt = Vec::with_capacity(raw_frames.len());
         for (i, frame) in raw_frames.iter().enumerate() {
@@ -509,11 +506,7 @@ impl Target {
     ///
     /// The breakpoint only stops execution when `condition` evaluates
     /// to a non-zero value (using the expression evaluator).
-    pub fn set_conditional_breakpoint(
-        &mut self,
-        addr: VirtAddr,
-        condition: String,
-    ) -> Result<u32> {
+    pub fn set_conditional_breakpoint(&mut self, addr: VirtAddr, condition: String) -> Result<u32> {
         self.breakpoints
             .set_with_condition(&self.process, addr, Some(condition))
     }
@@ -685,10 +678,9 @@ impl Target {
 
         // Build register vector (user_regs_struct order)
         let reg_names = [
-            "r15", "r14", "r13", "r12", "rbp", "rbx", "r11", "r10",
-            "r9", "r8", "rax", "rcx", "rdx", "rsi", "rdi", "orig_rax",
-            "rip", "cs", "eflags", "rsp", "ss", "fs_base", "gs_base",
-            "ds", "es", "fs", "gs",
+            "r15", "r14", "r13", "r12", "rbp", "rbx", "r11", "r10", "r9", "r8", "rax", "rcx",
+            "rdx", "rsi", "rdi", "orig_rax", "rip", "cs", "eflags", "rsp", "ss", "fs_base",
+            "gs_base", "ds", "es", "fs", "gs",
         ];
         let mut reg_vals = Vec::new();
         for name in &reg_names {
@@ -713,9 +705,15 @@ impl Target {
 
             let flags = {
                 let mut f = 0u32;
-                if region.perms.read { f |= crate::coredump::PF_R; }
-                if region.perms.write { f |= crate::coredump::PF_W; }
-                if region.perms.execute { f |= crate::coredump::PF_X; }
+                if region.perms.read {
+                    f |= crate::coredump::PF_R;
+                }
+                if region.perms.write {
+                    f |= crate::coredump::PF_W;
+                }
+                if region.perms.execute {
+                    f |= crate::coredump::PF_X;
+                }
                 f
             };
 
@@ -789,10 +787,8 @@ impl Target {
             .ok_or_else(|| Error::Other(format!("GOT entry '{}' not found", function_name)))?;
 
         let original = self.read_got_value(entry.got_addr)?;
-        self.process.write_memory(
-            VirtAddr(entry.got_addr),
-            &hook_target.to_le_bytes(),
-        )?;
+        self.process
+            .write_memory(VirtAddr(entry.got_addr), &hook_target.to_le_bytes())?;
 
         let idx = self.got_hooks.record_hook(
             function_name.to_string(),
@@ -812,7 +808,8 @@ impl Target {
         let got_addr = hook.got_address;
         let original = hook.original_target;
 
-        self.process.write_memory(got_addr, &original.to_le_bytes())?;
+        self.process
+            .write_memory(got_addr, &original.to_le_bytes())?;
         self.got_hooks.deactivate_hook(function_name);
         Ok(())
     }
@@ -874,7 +871,9 @@ impl Target {
             return Ok(Some(rust_type::demangle_symbol(&sym.name)));
         }
         if let Some(dwarf) = &self.dwarf {
-            return Ok(dwarf.find_function(pc)?.map(|n| rust_type::demangle_symbol(&n)));
+            return Ok(dwarf
+                .find_function(pc)?
+                .map(|n| rust_type::demangle_symbol(&n)));
         }
         Ok(None)
     }
@@ -916,8 +915,7 @@ impl Target {
             read_memory: &|addr, len| self.process.read_memory(VirtAddr(addr), len),
         };
 
-        let result =
-            crate::dwarf_expr::evaluate(&var.location_expr, encoding, &ctx)?;
+        let result = crate::dwarf_expr::evaluate(&var.location_expr, encoding, &ctx)?;
 
         let read_mem = |addr: u64, len: usize| self.process.read_memory(VirtAddr(addr), len);
 
@@ -979,14 +977,12 @@ impl Target {
             read_memory: &|addr, len| self.process.read_memory(VirtAddr(addr), len),
         };
 
-        let result =
-            crate::dwarf_expr::evaluate(&var.location_expr, encoding, &ctx)?;
+        let result = crate::dwarf_expr::evaluate(&var.location_expr, encoding, &ctx)?;
 
         let data = match &result {
-            crate::dwarf_expr::ExprResult::Address(addr) => {
-                self.process
-                    .read_memory(VirtAddr(*addr), var.type_info.byte_size as usize)?
-            }
+            crate::dwarf_expr::ExprResult::Address(addr) => self
+                .process
+                .read_memory(VirtAddr(*addr), var.type_info.byte_size as usize)?,
             crate::dwarf_expr::ExprResult::Register(reg) => {
                 let val = dwarf_regs
                     .iter()
@@ -995,9 +991,7 @@ impl Target {
                     .unwrap_or(0);
                 val.to_le_bytes().to_vec()
             }
-            crate::dwarf_expr::ExprResult::Constant(val) => {
-                val.to_le_bytes().to_vec()
-            }
+            crate::dwarf_expr::ExprResult::Constant(val) => val.to_le_bytes().to_vec(),
             crate::dwarf_expr::ExprResult::OptimizedOut => {
                 return Err(Error::Other("variable optimized out".into()));
             }
@@ -1082,10 +1076,7 @@ impl Target {
 
     /// Get the signal handling policy for a signal.
     pub fn signal_policy(&self, sig: Signal) -> SignalPolicy {
-        self.signal_policies
-            .get(&sig)
-            .copied()
-            .unwrap_or_default()
+        self.signal_policies.get(&sig).copied().unwrap_or_default()
     }
 
     /// Set the signal handling policy for a signal.
@@ -1190,8 +1181,7 @@ impl Target {
                 let name = crate::syscall::name(*number)
                     .unwrap_or("unknown")
                     .to_string();
-                let retval_formatted =
-                    syscall_trace::format_syscall_return(*number, *retval);
+                let retval_formatted = syscall_trace::format_syscall_return(*number, *retval);
                 EventKind::SyscallExit {
                     number: *number,
                     name,
@@ -1201,10 +1191,7 @@ impl Target {
             }
             StopReason::Signal(sig) => EventKind::Signal {
                 signal: format!("{}", sig),
-                addr: self
-                    .read_registers()
-                    .ok()
-                    .map(|r| VirtAddr(r.pc())),
+                addr: self.read_registers().ok().map(|r| VirtAddr(r.pc())),
             },
             StopReason::BreakpointHit { addr } => {
                 let function = self.current_function().ok().flatten();
@@ -1228,12 +1215,8 @@ impl Target {
             StopReason::Terminated(sig) => EventKind::ProcessTerminated {
                 signal: format!("{}", sig),
             },
-            StopReason::ThreadCreated(pid) => EventKind::ThreadCreated {
-                tid: pid.as_raw(),
-            },
-            StopReason::ThreadExited(pid) => EventKind::ThreadExited {
-                tid: pid.as_raw(),
-            },
+            StopReason::ThreadCreated(pid) => EventKind::ThreadCreated { tid: pid.as_raw() },
+            StopReason::ThreadExited(pid) => EventKind::ThreadExited { tid: pid.as_raw() },
             StopReason::SingleStep => return, // Too noisy, skip
         };
         self.event_log.record(kind);

@@ -47,15 +47,14 @@ impl std::fmt::Display for AntiDebugTechnique {
 
 /// Scan an ELF binary for anti-debug patterns.
 pub fn scan(path: &Path) -> Result<Vec<AntiDebugFinding>> {
-    let data =
-        std::fs::read(path).map_err(|e| Error::Other(format!("read: {}", e)))?;
+    let data = std::fs::read(path).map_err(|e| Error::Other(format!("read: {}", e)))?;
     scan_bytes(&data)
 }
 
 /// Scan raw ELF data for anti-debug patterns.
 pub fn scan_bytes(data: &[u8]) -> Result<Vec<AntiDebugFinding>> {
-    let elf = goblin::elf::Elf::parse(data)
-        .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+    let elf =
+        goblin::elf::Elf::parse(data).map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
 
     let mut findings = Vec::new();
 
@@ -116,10 +115,22 @@ fn scan_strings_for_antidebug(
     findings: &mut Vec<AntiDebugFinding>,
 ) {
     let patterns: &[(&[u8], &str)] = &[
-        (b"/proc/self/status", "Reads /proc/self/status — TracerPid check"),
-        (b"/proc/self/maps", "Reads /proc/self/maps — memory layout inspection"),
-        (b"TracerPid", "References TracerPid string — debugger detection"),
-        (b"/proc/self/exe", "Reads /proc/self/exe — binary integrity check"),
+        (
+            b"/proc/self/status",
+            "Reads /proc/self/status — TracerPid check",
+        ),
+        (
+            b"/proc/self/maps",
+            "Reads /proc/self/maps — memory layout inspection",
+        ),
+        (
+            b"TracerPid",
+            "References TracerPid string — debugger detection",
+        ),
+        (
+            b"/proc/self/exe",
+            "Reads /proc/self/exe — binary integrity check",
+        ),
     ];
 
     for sh in &elf.section_headers {
@@ -143,11 +154,7 @@ fn scan_strings_for_antidebug(
 }
 
 /// Scan executable sections for the RDTSC instruction (0x0F 0x31).
-fn scan_for_rdtsc(
-    data: &[u8],
-    elf: &goblin::elf::Elf,
-    findings: &mut Vec<AntiDebugFinding>,
-) {
+fn scan_for_rdtsc(data: &[u8], elf: &goblin::elf::Elf, findings: &mut Vec<AntiDebugFinding>) {
     for sh in &elf.section_headers {
         if sh.sh_flags & u64::from(goblin::elf::section_header::SHF_EXECINSTR) == 0 {
             continue;
@@ -172,19 +179,12 @@ fn scan_for_rdtsc(
 }
 
 /// Scan for suspicious INT3 patterns in code (embedded traps for self-checking).
-fn scan_for_int3_checks(
-    data: &[u8],
-    elf: &goblin::elf::Elf,
-    findings: &mut Vec<AntiDebugFinding>,
-) {
+fn scan_for_int3_checks(data: &[u8], elf: &goblin::elf::Elf, findings: &mut Vec<AntiDebugFinding>) {
     for sh in &elf.section_headers {
         if sh.sh_flags & u64::from(goblin::elf::section_header::SHF_EXECINSTR) == 0 {
             continue;
         }
-        let name = elf
-            .shdr_strtab
-            .get_at(sh.sh_name)
-            .unwrap_or("");
+        let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
         // Skip PLT sections — INT3 padding is normal there
         if name.contains(".plt") {
             continue;
@@ -225,9 +225,7 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || needle.len() > haystack.len() {
         return None;
     }
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 /// Runtime anti-debug bypass configuration.

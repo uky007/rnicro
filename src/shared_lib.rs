@@ -73,16 +73,13 @@ pub fn read_rendezvous(process: &Process) -> Result<RendezvousInfo> {
         let p_type = u32::from_le_bytes(phdrs_data[off..off + 4].try_into().unwrap());
         if p_type == 2 {
             // PT_DYNAMIC
-            let p_vaddr = u64::from_le_bytes(
-                phdrs_data[off + 16..off + 24].try_into().unwrap(),
-            );
+            let p_vaddr = u64::from_le_bytes(phdrs_data[off + 16..off + 24].try_into().unwrap());
             dynamic_vaddr = Some(p_vaddr);
             break;
         }
     }
 
-    let dynamic_vaddr =
-        dynamic_vaddr.ok_or_else(|| Error::Other("PT_DYNAMIC not found".into()))?;
+    let dynamic_vaddr = dynamic_vaddr.ok_or_else(|| Error::Other("PT_DYNAMIC not found".into()))?;
 
     // Step 3: Read .dynamic section entries, find DT_DEBUG
     // Each entry is 16 bytes: d_tag (i64) + d_val (u64).

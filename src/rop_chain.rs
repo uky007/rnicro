@@ -13,21 +13,43 @@ use crate::rop::Gadget;
 /// Simplified x86_64 register enum for chain building.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum X64Reg {
-    Rax, Rbx, Rcx, Rdx, Rsi, Rdi, Rbp, Rsp,
-    R8, R9, R10, R11, R12, R13, R14, R15,
+    Rax,
+    Rbx,
+    Rcx,
+    Rdx,
+    Rsi,
+    Rdi,
+    Rbp,
+    Rsp,
+    R8,
+    R9,
+    R10,
+    R11,
+    R12,
+    R13,
+    R14,
+    R15,
 }
 
 impl X64Reg {
     /// Syscall argument register order.
     pub const SYSCALL_ARGS: [X64Reg; 6] = [
-        X64Reg::Rdi, X64Reg::Rsi, X64Reg::Rdx,
-        X64Reg::R10, X64Reg::R8, X64Reg::R9,
+        X64Reg::Rdi,
+        X64Reg::Rsi,
+        X64Reg::Rdx,
+        X64Reg::R10,
+        X64Reg::R8,
+        X64Reg::R9,
     ];
 
     /// Calling convention argument register order.
     pub const CALL_ARGS: [X64Reg; 6] = [
-        X64Reg::Rdi, X64Reg::Rsi, X64Reg::Rdx,
-        X64Reg::Rcx, X64Reg::R8, X64Reg::R9,
+        X64Reg::Rdi,
+        X64Reg::Rsi,
+        X64Reg::Rdx,
+        X64Reg::Rcx,
+        X64Reg::R8,
+        X64Reg::R9,
     ];
 
     fn from_iced(reg: Register) -> Option<Self> {
@@ -56,14 +78,22 @@ impl X64Reg {
 impl std::fmt::Display for X64Reg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            X64Reg::Rax => "rax", X64Reg::Rbx => "rbx",
-            X64Reg::Rcx => "rcx", X64Reg::Rdx => "rdx",
-            X64Reg::Rsi => "rsi", X64Reg::Rdi => "rdi",
-            X64Reg::Rbp => "rbp", X64Reg::Rsp => "rsp",
-            X64Reg::R8  => "r8",  X64Reg::R9  => "r9",
-            X64Reg::R10 => "r10", X64Reg::R11 => "r11",
-            X64Reg::R12 => "r12", X64Reg::R13 => "r13",
-            X64Reg::R14 => "r14", X64Reg::R15 => "r15",
+            X64Reg::Rax => "rax",
+            X64Reg::Rbx => "rbx",
+            X64Reg::Rcx => "rcx",
+            X64Reg::Rdx => "rdx",
+            X64Reg::Rsi => "rsi",
+            X64Reg::Rdi => "rdi",
+            X64Reg::Rbp => "rbp",
+            X64Reg::Rsp => "rsp",
+            X64Reg::R8 => "r8",
+            X64Reg::R9 => "r9",
+            X64Reg::R10 => "r10",
+            X64Reg::R11 => "r11",
+            X64Reg::R12 => "r12",
+            X64Reg::R13 => "r13",
+            X64Reg::R14 => "r14",
+            X64Reg::R15 => "r15",
         };
         write!(f, "{}", s)
     }
@@ -208,25 +238,22 @@ fn is_ret(insn: &Instruction) -> bool {
 }
 
 fn is_pop64(insn: &Instruction) -> bool {
-    matches!(insn.code(),
-        Code::Pop_r64 |
-        Code::Pop_rm64
-    )
+    matches!(insn.code(), Code::Pop_r64 | Code::Pop_rm64)
 }
 
 fn is_xor_self(insn: &Instruction) -> bool {
-    matches!(insn.code(),
-        Code::Xor_r32_rm32 | Code::Xor_r64_rm64 |
-        Code::Xor_rm32_r32 | Code::Xor_rm64_r64
+    matches!(
+        insn.code(),
+        Code::Xor_r32_rm32 | Code::Xor_r64_rm64 | Code::Xor_rm32_r32 | Code::Xor_rm64_r64
     ) && insn.op0_register() == insn.op1_register()
 }
 
 fn is_mov_reg_reg(insn: &Instruction) -> bool {
     // mov r64, r/m64 (opcode 8B) or mov r/m64, r64 (opcode 89)
     if insn.op0_kind() == OpKind::Register && insn.op1_kind() == OpKind::Register {
-        return matches!(insn.code(),
-            Code::Mov_r64_rm64 | Code::Mov_r32_rm32 |
-            Code::Mov_rm64_r64 | Code::Mov_rm32_r32
+        return matches!(
+            insn.code(),
+            Code::Mov_r64_rm64 | Code::Mov_r32_rm32 | Code::Mov_rm64_r64 | Code::Mov_rm32_r32
         );
     }
     false
@@ -246,7 +273,8 @@ fn count_extra_pops(insns: &[Instruction], effect: &GadgetEffect) -> usize {
         return 0;
     }
     // Count all pops except the first one
-    insns.iter()
+    insns
+        .iter()
         .filter(|i| is_pop64(i))
         .count()
         .saturating_sub(1)
@@ -437,9 +465,9 @@ impl RopChainBuilder {
         elements: &mut Vec<ChainElement>,
         payload: &mut Vec<u8>,
     ) -> Result<()> {
-        let steps = self.find_reg_set(reg, value).ok_or_else(|| {
-            Error::Other(format!("no gadget path to set {} = {:#x}", reg, value))
-        })?;
+        let steps = self
+            .find_reg_set(reg, value)
+            .ok_or_else(|| Error::Other(format!("no gadget path to set {} = {:#x}", reg, value)))?;
 
         for (idx, val) in steps {
             if idx == usize::MAX {
@@ -503,9 +531,10 @@ impl RopChainBuilder {
         }
 
         // Emit syscall gadget
-        let syscall_idx = self.syscall_indices.first().ok_or_else(|| {
-            Error::Other("no syscall gadget available".into())
-        })?;
+        let syscall_idx = self
+            .syscall_indices
+            .first()
+            .ok_or_else(|| Error::Other("no syscall gadget available".into()))?;
         let cg = &self.classified[*syscall_idx];
         let offset = payload.len();
         payload.extend_from_slice(&cg.gadget.addr.to_le_bytes());
@@ -532,9 +561,9 @@ impl RopChainBuilder {
 
     /// Emit a ret gadget for stack alignment.
     pub fn build_ret_sled(&self, count: usize) -> Result<RopChain> {
-        let ret_idx = self.ret_index.ok_or_else(|| {
-            Error::Other("no ret gadget available".into())
-        })?;
+        let ret_idx = self
+            .ret_index
+            .ok_or_else(|| Error::Other("no ret gadget available".into()))?;
         let cg = &self.classified[ret_idx];
 
         let mut elements = Vec::new();
@@ -621,10 +650,13 @@ mod tests {
         // mov rdi, rax; ret  =  48 89 c7 c3
         let g = make_gadget(0x6000, &[0x48, 0x89, 0xc7, 0xc3], "mov rdi, rax; ret");
         let cg = classify_gadget(&g);
-        assert_eq!(cg.effect, GadgetEffect::MovRegReg {
-            dst: X64Reg::Rdi,
-            src: X64Reg::Rax,
-        });
+        assert_eq!(
+            cg.effect,
+            GadgetEffect::MovRegReg {
+                dst: X64Reg::Rdi,
+                src: X64Reg::Rax,
+            }
+        );
     }
 
     #[test]
@@ -646,11 +678,11 @@ mod tests {
     #[test]
     fn build_execve_chain() {
         let gadgets = vec![
-            make_gadget(0x1000, &[0x5f, 0xc3], "pop rdi; ret"),         // pop rdi
-            make_gadget(0x2000, &[0x58, 0xc3], "pop rax; ret"),         // pop rax
-            make_gadget(0x3000, &[0x5e, 0xc3], "pop rsi; ret"),         // pop rsi
-            make_gadget(0x4000, &[0x5a, 0xc3], "pop rdx; ret"),         // pop rdx
-            make_gadget(0x5000, &[0x0f, 0x05, 0xc3], "syscall; ret"),   // syscall
+            make_gadget(0x1000, &[0x5f, 0xc3], "pop rdi; ret"), // pop rdi
+            make_gadget(0x2000, &[0x58, 0xc3], "pop rax; ret"), // pop rax
+            make_gadget(0x3000, &[0x5e, 0xc3], "pop rsi; ret"), // pop rsi
+            make_gadget(0x4000, &[0x5a, 0xc3], "pop rdx; ret"), // pop rdx
+            make_gadget(0x5000, &[0x0f, 0x05, 0xc3], "syscall; ret"), // syscall
         ];
         let builder = RopChainBuilder::new(&gadgets);
         let chain = builder.build_execve(0x402000).unwrap();
@@ -660,14 +692,15 @@ mod tests {
         assert!(chain.payload.len().is_multiple_of(8));
 
         // Extract u64 values from payload
-        let values: Vec<u64> = chain.payload
+        let values: Vec<u64> = chain
+            .payload
             .chunks_exact(8)
             .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
             .collect();
 
         // Should contain the gadget addresses and values
         assert!(values.contains(&0x2000)); // pop rax gadget
-        assert!(values.contains(&59));     // execve syscall number
+        assert!(values.contains(&59)); // execve syscall number
         assert!(values.contains(&0x1000)); // pop rdi gadget
         assert!(values.contains(&0x402000)); // /bin/sh address
         assert!(values.contains(&0x5000)); // syscall gadget
@@ -688,7 +721,8 @@ mod tests {
         let chain = builder.build_syscall(1, &[1, 0x402000, 0x100]).unwrap();
         assert!(!chain.payload.is_empty());
 
-        let values: Vec<u64> = chain.payload
+        let values: Vec<u64> = chain
+            .payload
             .chunks_exact(8)
             .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
             .collect();
@@ -710,7 +744,8 @@ mod tests {
         let builder = RopChainBuilder::new(&gadgets);
         let chain = builder.build_execve(0x402000).unwrap();
 
-        let values: Vec<u64> = chain.payload
+        let values: Vec<u64> = chain
+            .payload
             .chunks_exact(8)
             .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
             .collect();
@@ -734,13 +769,12 @@ mod tests {
 
     #[test]
     fn ret_sled() {
-        let gadgets = vec![
-            make_gadget(0x1000, &[0xc3], "ret"),
-        ];
+        let gadgets = vec![make_gadget(0x1000, &[0xc3], "ret")];
         let builder = RopChainBuilder::new(&gadgets);
         let chain = builder.build_ret_sled(3).unwrap();
         assert_eq!(chain.payload.len(), 24); // 3 * 8 bytes
-        let values: Vec<u64> = chain.payload
+        let values: Vec<u64> = chain
+            .payload
             .chunks_exact(8)
             .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
             .collect();
@@ -760,6 +794,9 @@ mod tests {
         let builder = RopChainBuilder::new(&gadgets);
         let chain = builder.build_syscall(1, &[1, 0x402000, 0x100]).unwrap();
         // Chain should include padding for the extra r15 pop
-        assert!(chain.elements.iter().any(|e| e.description.contains("padding")));
+        assert!(chain
+            .elements
+            .iter()
+            .any(|e| e.description.contains("padding")));
     }
 }

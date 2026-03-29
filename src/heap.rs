@@ -178,11 +178,7 @@ where
 /// Walk a fastbin linked list.
 ///
 /// Fastbins use single-linked lists via the `fd` field.
-pub fn walk_fastbin<F>(
-    head: u64,
-    read_memory: &F,
-    max_entries: usize,
-) -> Result<Vec<u64>>
+pub fn walk_fastbin<F>(head: u64, read_memory: &F, max_entries: usize) -> Result<Vec<u64>>
 where
     F: Fn(u64, usize) -> Result<Vec<u8>>,
 {
@@ -217,11 +213,9 @@ pub fn parse_tcache(data: &[u8]) -> Result<Vec<TcacheEntry>> {
 
     let mut entries = Vec::new();
     for i in 0..TCACHE_MAX_BINS {
-        let count =
-            u16::from_le_bytes(data[i * 2..i * 2 + 2].try_into().unwrap());
+        let count = u16::from_le_bytes(data[i * 2..i * 2 + 2].try_into().unwrap());
         let head_offset = 128 + i * 8; // After counts array
-        let head =
-            u64::from_le_bytes(data[head_offset..head_offset + 8].try_into().unwrap());
+        let head = u64::from_le_bytes(data[head_offset..head_offset + 8].try_into().unwrap());
 
         if count > 0 || head != 0 {
             entries.push(TcacheEntry {

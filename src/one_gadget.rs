@@ -4,7 +4,9 @@
 //! with minimal constraints, modeled after david942j's one_gadget tool.
 
 use crate::error::{Error, Result};
-use iced_x86::{Code, Decoder, DecoderOptions, FlowControl, Formatter as _, Instruction, OpKind, Register};
+use iced_x86::{
+    Code, Decoder, DecoderOptions, FlowControl, Formatter as _, Instruction, OpKind, Register,
+};
 
 /// A one-gadget candidate.
 #[derive(Debug, Clone)]
@@ -43,15 +45,27 @@ impl std::fmt::Display for Constraint {
 /// Registers referenced in constraints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConstraintReg {
-    Rax, Rbx, Rcx, Rdx, Rsi, Rdi, R12, R15,
+    Rax,
+    Rbx,
+    Rcx,
+    Rdx,
+    Rsi,
+    Rdi,
+    R12,
+    R15,
 }
 
 impl std::fmt::Display for ConstraintReg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            Self::Rax => "rax", Self::Rbx => "rbx", Self::Rcx => "rcx",
-            Self::Rdx => "rdx", Self::Rsi => "rsi", Self::Rdi => "rdi",
-            Self::R12 => "r12", Self::R15 => "r15",
+            Self::Rax => "rax",
+            Self::Rbx => "rbx",
+            Self::Rcx => "rcx",
+            Self::Rdx => "rdx",
+            Self::Rsi => "rsi",
+            Self::Rdi => "rdi",
+            Self::R12 => "r12",
+            Self::R15 => "r15",
         };
         write!(f, "{}", s)
     }
@@ -91,8 +105,8 @@ enum SymValue {
 
 /// Find one-gadgets in an ELF binary (typically libc).
 pub fn find_one_gadgets(data: &[u8]) -> Result<Vec<OneGadget>> {
-    let elf = goblin::elf::Elf::parse(data)
-        .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+    let elf =
+        goblin::elf::Elf::parse(data).map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
 
     // Step 1: Find "/bin/sh\0" string
     let binsh_offsets = find_binsh_strings(data);
@@ -104,9 +118,10 @@ pub fn find_one_gadgets(data: &[u8]) -> Result<Vec<OneGadget>> {
     let execve_addr = find_symbol_addr(&elf, "execve");
 
     // Step 3: Locate .text section for scanning
-    let text_section = elf.section_headers.iter().find(|sh| {
-        elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("") == ".text"
-    });
+    let text_section = elf
+        .section_headers
+        .iter()
+        .find(|sh| elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("") == ".text");
 
     let (text_offset, text_size, text_vaddr) = match text_section {
         Some(sh) => (sh.sh_offset as usize, sh.sh_size as usize, sh.sh_addr),
@@ -126,13 +141,13 @@ pub fn find_one_gadgets(data: &[u8]) -> Result<Vec<OneGadget>> {
     if let Some(execve_va) = execve_addr {
         for i in 0..text_data.len().saturating_sub(4) {
             if text_data[i] == 0xE8 {
-                let rel = i32::from_le_bytes(text_data[i+1..i+5].try_into().unwrap());
+                let rel = i32::from_le_bytes(text_data[i + 1..i + 5].try_into().unwrap());
                 let call_va = text_vaddr + i as u64;
                 let target = (call_va as i64 + 5 + rel as i64) as u64;
                 if target == execve_va {
-                    if let Some(g) = analyze_call_site(
-                        text_data, text_vaddr, i, &binsh_offsets, data,
-                    ) {
+                    if let Some(g) =
+                        analyze_call_site(text_data, text_vaddr, i, &binsh_offsets, data)
+                    {
                         gadgets.push(g);
                     }
                 }
@@ -143,9 +158,7 @@ pub fn find_one_gadgets(data: &[u8]) -> Result<Vec<OneGadget>> {
     // Scan for `syscall` instructions preceded by `mov eax, 59`
     for i in 0..text_data.len().saturating_sub(1) {
         if text_data[i] == 0x0F && text_data[i + 1] == 0x05 {
-            if let Some(g) = analyze_syscall_site(
-                text_data, text_vaddr, i, &binsh_offsets, data,
-            ) {
+            if let Some(g) = analyze_syscall_site(text_data, text_vaddr, i, &binsh_offsets, data) {
                 gadgets.push(g);
             }
         }
@@ -208,7 +221,11 @@ fn analyze_call_site(
         let region = &text_data[start..call_offset + 5]; // include the call
 
         if let Some(gadget) = try_analyze_forward(
-            region, candidate_va, binsh_offsets, elf_data, call_offset - start,
+            region,
+            candidate_va,
+            binsh_offsets,
+            elf_data,
+            call_offset - start,
         ) {
             return Some(gadget);
         }
@@ -233,7 +250,8 @@ fn analyze_syscall_site(
 
         // Forward-analyze to check if rax gets set to 59
         let mut decoder = Decoder::with_ip(64, region, candidate_va, DecoderOptions::NONE);
-        let mut regs: std::collections::HashMap<Register, SymValue> = std::collections::HashMap::new();
+        let mut regs: std::collections::HashMap<Register, SymValue> =
+            std::collections::HashMap::new();
         let mut valid = true;
 
         while decoder.can_decode() {
@@ -272,10 +290,7 @@ fn analyze_syscall_site(
             regs.get(&Register::RAX).or(regs.get(&Register::EAX)),
             Some(SymValue::Constant(59))
         );
-        let rdi_is_binsh = matches!(
-            regs.get(&Register::RDI),
-            Some(SymValue::BinShAddr)
-        );
+        let rdi_is_binsh = matches!(regs.get(&Register::RDI), Some(SymValue::BinShAddr));
 
         if rax_is_execve && rdi_is_binsh {
             let mut constraints = Vec::new();
@@ -318,7 +333,9 @@ fn try_analyze_forward(
 
         // Stop conditions
         match insn.flow_control() {
-            FlowControl::ConditionalBranch | FlowControl::UnconditionalBranch | FlowControl::Return => {
+            FlowControl::ConditionalBranch
+            | FlowControl::UnconditionalBranch
+            | FlowControl::Return => {
                 return None;
             }
             _ => {}
@@ -366,8 +383,7 @@ fn update_reg_state(
 ) {
     match insn.code() {
         // xor reg, reg -> zero
-        Code::Xor_r32_rm32 | Code::Xor_r64_rm64
-        | Code::Xor_rm32_r32 | Code::Xor_rm64_r64 => {
+        Code::Xor_r32_rm32 | Code::Xor_r64_rm64 | Code::Xor_rm32_r32 | Code::Xor_rm64_r64 => {
             if insn.op0_register() == insn.op1_register() {
                 let reg64 = to_reg64(insn.op0_register());
                 regs.insert(reg64, SymValue::Constant(0));
@@ -376,7 +392,8 @@ fn update_reg_state(
         // mov reg, imm
         Code::Mov_r32_imm32 | Code::Mov_r64_imm64 => {
             let reg64 = to_reg64(insn.op0_register());
-            if insn.op1_kind() == OpKind::Immediate32 || insn.op1_kind() == OpKind::Immediate64
+            if insn.op1_kind() == OpKind::Immediate32
+                || insn.op1_kind() == OpKind::Immediate64
                 || insn.op1_kind() == OpKind::Immediate32to64
             {
                 regs.insert(reg64, SymValue::Constant(insn.immediate(1)));
@@ -385,7 +402,9 @@ fn update_reg_state(
         // lea reg, [rip + disp]
         Code::Lea_r64_m | Code::Lea_r32_m => {
             if insn.memory_base() == Register::RIP {
-                let target = insn.ip().wrapping_add(insn.len() as u64)
+                let target = insn
+                    .ip()
+                    .wrapping_add(insn.len() as u64)
                     .wrapping_add(insn.memory_displacement64());
                 let reg64 = to_reg64(insn.op0_register());
                 // Check if target points to "/bin/sh"
@@ -517,7 +536,12 @@ impl iced_x86::FormatterOutput for FmtOutput {
 pub fn format_one_gadgets(gadgets: &[OneGadget]) -> String {
     let mut out = String::new();
     for (i, g) in gadgets.iter().enumerate() {
-        out.push_str(&format!("=== One-Gadget #{} (offset {:#x}, {}) ===\n", i + 1, g.offset, g.difficulty));
+        out.push_str(&format!(
+            "=== One-Gadget #{} (offset {:#x}, {}) ===\n",
+            i + 1,
+            g.offset,
+            g.difficulty
+        ));
         if g.constraints.is_empty() {
             out.push_str("  Constraints: none\n");
         } else {
@@ -553,8 +577,14 @@ mod tests {
 
     #[test]
     fn constraint_display() {
-        assert_eq!(format!("{}", Constraint::RegNull(ConstraintReg::Rdx)), "rdx == NULL");
-        assert_eq!(format!("{}", Constraint::StackNull(0x30)), "[rsp+0x30] == NULL");
+        assert_eq!(
+            format!("{}", Constraint::RegNull(ConstraintReg::Rdx)),
+            "rdx == NULL"
+        );
+        assert_eq!(
+            format!("{}", Constraint::StackNull(0x30)),
+            "[rsp+0x30] == NULL"
+        );
         assert_eq!(format!("{}", Constraint::RspAligned), "rsp & 0xf == 0");
     }
 

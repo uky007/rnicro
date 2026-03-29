@@ -129,7 +129,11 @@ pub fn partial_overwrite(target_addr: u64, overwrite_bytes: usize) -> PartialOve
     } else {
         1.0 / (1u64 << random_bits) as f64
     };
-    let expected_attempts = if random_bits == 0 { 1 } else { 1u64 << random_bits };
+    let expected_attempts = if random_bits == 0 {
+        1
+    } else {
+        1u64 << random_bits
+    };
 
     PartialOverwrite {
         overwrite_bytes,
@@ -234,8 +238,8 @@ impl LibcDb {
 
     /// Extract symbol offsets from an ELF's dynamic symbol table.
     pub fn extract_offsets(data: &[u8]) -> Result<HashMap<String, u64>> {
-        let elf = goblin::elf::Elf::parse(data)
-            .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+        let elf =
+            goblin::elf::Elf::parse(data).map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
         let mut offsets = HashMap::new();
         for sym in &elf.dynsyms {
             if sym.st_value != 0 {
@@ -251,8 +255,8 @@ impl LibcDb {
 
     /// Extract BuildID from ELF .note.gnu.build-id section.
     pub fn extract_build_id(data: &[u8]) -> Result<String> {
-        let elf = goblin::elf::Elf::parse(data)
-            .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+        let elf =
+            goblin::elf::Elf::parse(data).map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
 
         for sh in &elf.section_headers {
             let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");

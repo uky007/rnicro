@@ -24,15 +24,14 @@ pub struct ExtractedString {
 /// of at least `min_length` bytes, terminated by a NUL byte or
 /// non-printable character.
 pub fn extract_strings(path: &Path, min_length: usize) -> Result<Vec<ExtractedString>> {
-    let data =
-        std::fs::read(path).map_err(|e| Error::Other(format!("read: {}", e)))?;
+    let data = std::fs::read(path).map_err(|e| Error::Other(format!("read: {}", e)))?;
     extract_strings_bytes(&data, min_length)
 }
 
 /// Extract printable ASCII strings from raw ELF data.
 pub fn extract_strings_bytes(data: &[u8], min_length: usize) -> Result<Vec<ExtractedString>> {
-    let elf = goblin::elf::Elf::parse(data)
-        .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+    let elf =
+        goblin::elf::Elf::parse(data).map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
 
     let min_length = if min_length == 0 { 4 } else { min_length };
     let mut strings = Vec::new();
@@ -50,10 +49,7 @@ pub fn extract_strings_bytes(data: &[u8], min_length: usize) -> Result<Vec<Extra
         }
 
         let section_data = &data[offset..offset + size];
-        let section_name = elf
-            .shdr_strtab
-            .get_at(sh.sh_name)
-            .unwrap_or("<unknown>");
+        let section_name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("<unknown>");
 
         let mut run_start: Option<usize> = None;
 
@@ -66,8 +62,7 @@ pub fn extract_strings_bytes(data: &[u8], min_length: usize) -> Result<Vec<Extra
                 if let Some(start) = run_start {
                     let len = i - start;
                     if len >= min_length {
-                        let content =
-                            String::from_utf8_lossy(&section_data[start..i]).into_owned();
+                        let content = String::from_utf8_lossy(&section_data[start..i]).into_owned();
                         strings.push(ExtractedString {
                             addr: sh.sh_addr + start as u64,
                             section: section_name.to_string(),
@@ -83,8 +78,7 @@ pub fn extract_strings_bytes(data: &[u8], min_length: usize) -> Result<Vec<Extra
         if let Some(start) = run_start {
             let len = section_data.len() - start;
             if len >= min_length {
-                let content =
-                    String::from_utf8_lossy(&section_data[start..]).into_owned();
+                let content = String::from_utf8_lossy(&section_data[start..]).into_owned();
                 strings.push(ExtractedString {
                     addr: sh.sh_addr + start as u64,
                     section: section_name.to_string(),
@@ -104,11 +98,7 @@ fn is_printable_ascii(b: u8) -> bool {
 
 /// Extract strings from raw memory bytes (no ELF structure needed).
 /// Useful for scanning process memory regions.
-pub fn extract_strings_raw(
-    data: &[u8],
-    base_addr: u64,
-    min_length: usize,
-) -> Vec<ExtractedString> {
+pub fn extract_strings_raw(data: &[u8], base_addr: u64, min_length: usize) -> Vec<ExtractedString> {
     let min_length = if min_length == 0 { 4 } else { min_length };
     let mut strings = Vec::new();
     let mut run_start: Option<usize> = None;
@@ -122,8 +112,7 @@ pub fn extract_strings_raw(
             if let Some(start) = run_start {
                 let len = i - start;
                 if len >= min_length {
-                    let content =
-                        String::from_utf8_lossy(&data[start..i]).into_owned();
+                    let content = String::from_utf8_lossy(&data[start..i]).into_owned();
                     strings.push(ExtractedString {
                         addr: base_addr + start as u64,
                         section: String::new(),
@@ -138,8 +127,7 @@ pub fn extract_strings_raw(
     if let Some(start) = run_start {
         let len = data.len() - start;
         if len >= min_length {
-            let content =
-                String::from_utf8_lossy(&data[start..]).into_owned();
+            let content = String::from_utf8_lossy(&data[start..]).into_owned();
             strings.push(ExtractedString {
                 addr: base_addr + start as u64,
                 section: String::new(),

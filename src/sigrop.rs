@@ -68,10 +68,22 @@ impl Default for SigFrame {
             ss_sp: 0,
             ss_flags: 0,
             ss_size: 0,
-            r8: 0, r9: 0, r10: 0, r11: 0,
-            r12: 0, r13: 0, r14: 0, r15: 0,
-            rdi: 0, rsi: 0, rbp: 0, rbx: 0,
-            rdx: 0, rax: 0, rcx: 0, rsp: 0,
+            r8: 0,
+            r9: 0,
+            r10: 0,
+            r11: 0,
+            r12: 0,
+            r13: 0,
+            r14: 0,
+            r15: 0,
+            rdi: 0,
+            rsi: 0,
+            rbp: 0,
+            rbx: 0,
+            rdx: 0,
+            rax: 0,
+            rcx: 0,
+            rsp: 0,
             rip: 0,
             eflags: 0,
             csgsfs: DEFAULT_CSGSFS,
@@ -93,19 +105,40 @@ impl SigFrame {
     }
 
     /// Set `rip` (where to jump after sigreturn).
-    pub fn set_rip(mut self, rip: u64) -> Self { self.rip = rip; self }
+    pub fn set_rip(mut self, rip: u64) -> Self {
+        self.rip = rip;
+        self
+    }
     /// Set `rsp` (stack pointer after sigreturn).
-    pub fn set_rsp(mut self, rsp: u64) -> Self { self.rsp = rsp; self }
+    pub fn set_rsp(mut self, rsp: u64) -> Self {
+        self.rsp = rsp;
+        self
+    }
     /// Set `rax` (syscall number for chained calls).
-    pub fn set_rax(mut self, rax: u64) -> Self { self.rax = rax; self }
+    pub fn set_rax(mut self, rax: u64) -> Self {
+        self.rax = rax;
+        self
+    }
     /// Set `rdi` (first argument).
-    pub fn set_rdi(mut self, rdi: u64) -> Self { self.rdi = rdi; self }
+    pub fn set_rdi(mut self, rdi: u64) -> Self {
+        self.rdi = rdi;
+        self
+    }
     /// Set `rsi` (second argument).
-    pub fn set_rsi(mut self, rsi: u64) -> Self { self.rsi = rsi; self }
+    pub fn set_rsi(mut self, rsi: u64) -> Self {
+        self.rsi = rsi;
+        self
+    }
     /// Set `rdx` (third argument).
-    pub fn set_rdx(mut self, rdx: u64) -> Self { self.rdx = rdx; self }
+    pub fn set_rdx(mut self, rdx: u64) -> Self {
+        self.rdx = rdx;
+        self
+    }
     /// Set `r10` (fourth syscall argument).
-    pub fn set_r10(mut self, r10: u64) -> Self { self.r10 = r10; self }
+    pub fn set_r10(mut self, r10: u64) -> Self {
+        self.r10 = r10;
+        self
+    }
 
     /// Serialize the sigframe to little-endian bytes.
     pub fn to_bytes(&self) -> Vec<u8> {

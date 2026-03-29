@@ -106,27 +106,26 @@ impl GotHookManager {
 pub fn build_trampoline(original_target: u64) -> Vec<u8> {
     // Save caller-saved registers
     let mut code = vec![
-        0x50,                                    // push rax
-        0x51,                                    // push rcx
-        0x52,                                    // push rdx
-        0x56,                                    // push rsi
-        0x57,                                    // push rdi
-        0x41, 0x50,                              // push r8
-        0x41, 0x51,                              // push r9
-        0x41, 0x52,                              // push r10
-        0x41, 0x53,                              // push r11
+        0x50, // push rax
+        0x51, // push rcx
+        0x52, // push rdx
+        0x56, // push rsi
+        0x57, // push rdi
+        0x41, 0x50, // push r8
+        0x41, 0x51, // push r9
+        0x41, 0x52, // push r10
+        0x41, 0x53, // push r11
         // INT3 — debugger intercepts here
-        0xCC,
-        // Restore registers
-        0x41, 0x5B,                              // pop r11
-        0x41, 0x5A,                              // pop r10
-        0x41, 0x59,                              // pop r9
-        0x41, 0x58,                              // pop r8
-        0x5F,                                    // pop rdi
-        0x5E,                                    // pop rsi
-        0x5A,                                    // pop rdx
-        0x59,                                    // pop rcx
-        0x58,                                    // pop rax
+        0xCC, // Restore registers
+        0x41, 0x5B, // pop r11
+        0x41, 0x5A, // pop r10
+        0x41, 0x59, // pop r9
+        0x41, 0x58, // pop r8
+        0x5F, // pop rdi
+        0x5E, // pop rsi
+        0x5A, // pop rdx
+        0x59, // pop rcx
+        0x58, // pop rax
     ];
 
     // movabs rax, <original_target>
@@ -159,12 +158,7 @@ mod tests {
     #[test]
     fn manager_record_and_get() {
         let mut mgr = GotHookManager::new();
-        mgr.record_hook(
-            "puts".into(),
-            VirtAddr(0x601020),
-            0x7ffff7a649c0,
-            0x400100,
-        );
+        mgr.record_hook("puts".into(), VirtAddr(0x601020), 0x7ffff7a649c0, 0x400100);
         assert_eq!(mgr.active_hooks().len(), 1);
         let hook = mgr.get_hook("puts").unwrap();
         assert_eq!(hook.original_target, 0x7ffff7a649c0);

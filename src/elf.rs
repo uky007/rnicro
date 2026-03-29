@@ -29,8 +29,8 @@ pub struct GotPltEntry {
 /// associated dynamic symbol. PLT addresses are estimated from
 /// the `.plt` section layout (16 bytes per entry, first entry is PLT0).
 pub fn parse_got_plt(data: &[u8]) -> Result<Vec<GotPltEntry>> {
-    let elf = goblin::elf::Elf::parse(data)
-        .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+    let elf =
+        goblin::elf::Elf::parse(data).map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
 
     // Find .plt section for PLT address estimation
     let plt_section = elf.section_headers.iter().find(|sh| {
@@ -68,8 +68,8 @@ pub fn parse_got_plt(data: &[u8]) -> Result<Vec<GotPltEntry>> {
 
 /// Parse all dynamic relocations (from .rela.dyn) to find GOT entries.
 pub fn parse_got_dyn(data: &[u8]) -> Result<Vec<GotPltEntry>> {
-    let elf = goblin::elf::Elf::parse(data)
-        .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+    let elf =
+        goblin::elf::Elf::parse(data).map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
 
     let mut entries = Vec::new();
 
@@ -134,10 +134,10 @@ impl ElfFile {
     pub fn load(path: &Path) -> Result<Self> {
         let file = std::fs::File::open(path)
             .map_err(|e| Error::Other(format!("open ELF '{}': {}", path.display(), e)))?;
-        let mmap = unsafe { Mmap::map(&file) }
-            .map_err(|e| Error::Other(format!("mmap ELF: {}", e)))?;
-        let obj = object::File::parse(&*mmap)
-            .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+        let mmap =
+            unsafe { Mmap::map(&file) }.map_err(|e| Error::Other(format!("mmap ELF: {}", e)))?;
+        let obj =
+            object::File::parse(&*mmap).map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
 
         let mut symbols = Vec::new();
         for sym in obj.symbols() {
@@ -178,7 +178,10 @@ impl ElfFile {
         // Sort by address for efficient lookup
         symbols.sort_by_key(|s| s.addr);
 
-        Ok(ElfFile { _mmap: mmap, symbols })
+        Ok(ElfFile {
+            _mmap: mmap,
+            symbols,
+        })
     }
 
     /// Find a symbol by exact name match.
@@ -219,7 +222,10 @@ mod tests {
         tmp.write_all(b"dummy").unwrap();
         tmp.flush().unwrap();
         let mmap = unsafe { Mmap::map(tmp.as_file()).unwrap() };
-        ElfFile { _mmap: mmap, symbols }
+        ElfFile {
+            _mmap: mmap,
+            symbols,
+        }
     }
 
     #[test]

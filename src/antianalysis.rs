@@ -264,14 +264,14 @@ impl BypassEngine {
         }
 
         // open/openat("/proc/self/status", ...) → track the fd on exit
-        if self.config.bypass_proc_status
-            && (number == SYS_OPEN || number == SYS_OPENAT)
-        {
-            let path_addr = if number == SYS_OPENAT { args[1] } else { args[0] };
+        if self.config.bypass_proc_status && (number == SYS_OPEN || number == SYS_OPENAT) {
+            let path_addr = if number == SYS_OPENAT {
+                args[1]
+            } else {
+                args[0]
+            };
             if let Some(path) = read_string(path_addr) {
-                if path.contains("/proc/self/status")
-                    || path.contains("/proc/self/maps")
-                {
+                if path.contains("/proc/self/status") || path.contains("/proc/self/maps") {
                     self.pending_exit_action = Some(PendingAction {
                         syscall_number: number,
                         action: BypassAction::TrackProcFd,
@@ -290,7 +290,10 @@ impl BypassEngine {
                     syscall_number: SYS_READ,
                     action: BypassAction::SpoofTracerPid,
                     technique: "/proc/self/status check",
-                    detail: format!("read(fd={}) from tracked proc file, will spoof TracerPid", fd),
+                    detail: format!(
+                        "read(fd={}) from tracked proc file, will spoof TracerPid",
+                        fd
+                    ),
                 });
             }
         }
@@ -330,20 +333,19 @@ impl BypassEngine {
         if self.config.suppress_self_signals && number == SYS_KILL {
             let target_pid = args[0] as i32;
             let sig = args[1];
-            if (target_pid == self.tracee_pid || target_pid == 0)
-                && is_anti_debug_signal(sig) {
-                    self.pending_exit_action = Some(PendingAction {
-                        syscall_number: SYS_KILL,
-                        action: BypassAction::FakeReturnValue(0),
-                        technique: "self-signal (kill)",
-                        detail: format!(
-                            "suppressed kill({}, {}) self-signal",
-                            target_pid,
-                            signal_name(sig)
-                        ),
-                    });
-                    return BypassAction::SkipSyscall;
-                }
+            if (target_pid == self.tracee_pid || target_pid == 0) && is_anti_debug_signal(sig) {
+                self.pending_exit_action = Some(PendingAction {
+                    syscall_number: SYS_KILL,
+                    action: BypassAction::FakeReturnValue(0),
+                    technique: "self-signal (kill)",
+                    detail: format!(
+                        "suppressed kill({}, {}) self-signal",
+                        target_pid,
+                        signal_name(sig)
+                    ),
+                });
+                return BypassAction::SkipSyscall;
+            }
         }
 
         // tgkill(tgid, tid, sig) → suppress self-signal
@@ -420,9 +422,7 @@ impl BypassEngine {
                 match pending.syscall_number {
                     SYS_PTRACE => self.stats.ptrace_bypassed += 1,
                     SYS_ALARM | SYS_SETITIMER => self.stats.timers_neutralized += 1,
-                    SYS_KILL | SYS_TGKILL | SYS_TKILL => {
-                        self.stats.self_signals_suppressed += 1
-                    }
+                    SYS_KILL | SYS_TGKILL | SYS_TKILL => self.stats.self_signals_suppressed += 1,
                     _ => {}
                 }
                 event_log.record(EventKind::AntiDebugDetected {
@@ -497,10 +497,7 @@ impl BypassEngine {
         let mut result = buf.to_vec();
         let needle = b"TracerPid:\t";
 
-        if let Some(pos) = buf
-            .windows(needle.len())
-            .position(|w| w == needle)
-        {
+        if let Some(pos) = buf.windows(needle.len()).position(|w| w == needle) {
             let value_start = pos + needle.len();
             // Find end of the number (next newline or end of buffer)
             let value_end = result[value_start..]
@@ -533,7 +530,7 @@ fn is_anti_debug_signal(sig: u64) -> bool {
         | 9       // SIGKILL (won't reach handler, but suppressing the syscall works)
         | 10      // SIGUSR1 (often used as anti-debug signal)
         | 12      // SIGUSR2
-        | 19      // SIGSTOP (attempt to freeze self)
+        | 19 // SIGSTOP (attempt to freeze self)
     )
 }
 
@@ -607,9 +604,7 @@ mod tests {
         let mut log = EventLog::new();
 
         // openat(AT_FDCWD, "/proc/self/status", O_RDONLY)
-        let read_string = |_addr: u64| -> Option<String> {
-            Some("/proc/self/status".into())
-        };
+        let read_string = |_addr: u64| -> Option<String> { Some("/proc/self/status".into()) };
         let args = [0xffffff9c_u64, 0x7fff0000, 0, 0, 0, 0]; // AT_FDCWD, path, flags
         let action = engine.on_syscall_entry(SYS_OPENAT, &args, &read_string);
         assert_eq!(action, BypassAction::None);
@@ -920,7 +915,10 @@ mod tests {
         assert_eq!(engine.signal_policy(14), SignalBypassPolicy::Default);
 
         engine.set_signal_policy(14, SignalBypassPolicy::TransparentPass);
-        assert_eq!(engine.signal_policy(14), SignalBypassPolicy::TransparentPass);
+        assert_eq!(
+            engine.signal_policy(14),
+            SignalBypassPolicy::TransparentPass
+        );
 
         engine.set_signal_policy(14, SignalBypassPolicy::Suppress);
         assert_eq!(engine.signal_policy(14), SignalBypassPolicy::Suppress);
@@ -930,14 +928,14 @@ mod tests {
     fn is_anti_debug_signal_classification() {
         assert!(is_anti_debug_signal(14)); // SIGALRM
         assert!(is_anti_debug_signal(15)); // SIGTERM
-        assert!(is_anti_debug_signal(6));  // SIGABRT
-        assert!(is_anti_debug_signal(9));  // SIGKILL
+        assert!(is_anti_debug_signal(6)); // SIGABRT
+        assert!(is_anti_debug_signal(9)); // SIGKILL
         assert!(is_anti_debug_signal(10)); // SIGUSR1
         assert!(is_anti_debug_signal(12)); // SIGUSR2
 
         assert!(!is_anti_debug_signal(17)); // SIGCHLD — not anti-debug
         assert!(!is_anti_debug_signal(11)); // SIGSEGV — real crash
-        assert!(!is_anti_debug_signal(2));  // SIGINT — user interrupt
+        assert!(!is_anti_debug_signal(2)); // SIGINT — user interrupt
     }
 
     #[test]

@@ -218,8 +218,8 @@ pub const BAD_CHARS_STRICT: &[u8] = &[0x00, 0x0A, 0x0D, 0x20, 0x09, 0x0B, 0x0C, 
 
 /// Extract raw bytes from a named ELF section.
 pub fn extract_from_section(elf_data: &[u8], section_name: &str) -> Result<Vec<u8>> {
-    let elf = goblin::elf::Elf::parse(elf_data)
-        .map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
+    let elf =
+        goblin::elf::Elf::parse(elf_data).map_err(|e| Error::Other(format!("parse ELF: {}", e)))?;
     for sh in &elf.section_headers {
         let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
         if name == section_name {
@@ -230,7 +230,10 @@ pub fn extract_from_section(elf_data: &[u8], section_name: &str) -> Result<Vec<u
             }
         }
     }
-    Err(Error::Other(format!("section '{}' not found", section_name)))
+    Err(Error::Other(format!(
+        "section '{}' not found",
+        section_name
+    )))
 }
 
 #[cfg(test)]
@@ -321,6 +324,6 @@ mod tests {
         let stub = xor_decoder_stub(0x41, 10);
         assert!(!stub.is_empty());
         assert!(stub.contains(&0x41)); // key
-        assert!(stub.contains(&10));   // length
+        assert!(stub.contains(&10)); // length
     }
 }

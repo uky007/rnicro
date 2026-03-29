@@ -50,19 +50,31 @@ pub static SYSCALL_TABLE: &[SyscallDef] = &[
     SyscallDef {
         number: 0,
         name: "read",
-        args: &[("fd", ArgType::Fd), ("buf", ArgType::Ptr), ("count", ArgType::Size)],
+        args: &[
+            ("fd", ArgType::Fd),
+            ("buf", ArgType::Ptr),
+            ("count", ArgType::Size),
+        ],
         ret: ArgType::Int,
     },
     SyscallDef {
         number: 1,
         name: "write",
-        args: &[("fd", ArgType::Fd), ("buf", ArgType::Ptr), ("count", ArgType::Size)],
+        args: &[
+            ("fd", ArgType::Fd),
+            ("buf", ArgType::Ptr),
+            ("count", ArgType::Size),
+        ],
         ret: ArgType::Int,
     },
     SyscallDef {
         number: 2,
         name: "open",
-        args: &[("pathname", ArgType::StringPtr), ("flags", ArgType::OpenFlags), ("mode", ArgType::FileMode)],
+        args: &[
+            ("pathname", ArgType::StringPtr),
+            ("flags", ArgType::OpenFlags),
+            ("mode", ArgType::FileMode),
+        ],
         ret: ArgType::Fd,
     },
     SyscallDef {
@@ -86,19 +98,34 @@ pub static SYSCALL_TABLE: &[SyscallDef] = &[
     SyscallDef {
         number: 8,
         name: "lseek",
-        args: &[("fd", ArgType::Fd), ("offset", ArgType::Int), ("whence", ArgType::Uint)],
+        args: &[
+            ("fd", ArgType::Fd),
+            ("offset", ArgType::Int),
+            ("whence", ArgType::Uint),
+        ],
         ret: ArgType::Int,
     },
     SyscallDef {
         number: 9,
         name: "mmap",
-        args: &[("addr", ArgType::Ptr), ("length", ArgType::Size), ("prot", ArgType::MmapProt), ("flags", ArgType::MmapFlags), ("fd", ArgType::Fd), ("offset", ArgType::Int)],
+        args: &[
+            ("addr", ArgType::Ptr),
+            ("length", ArgType::Size),
+            ("prot", ArgType::MmapProt),
+            ("flags", ArgType::MmapFlags),
+            ("fd", ArgType::Fd),
+            ("offset", ArgType::Int),
+        ],
         ret: ArgType::Ptr,
     },
     SyscallDef {
         number: 10,
         name: "mprotect",
-        args: &[("addr", ArgType::Ptr), ("len", ArgType::Size), ("prot", ArgType::MmapProt)],
+        args: &[
+            ("addr", ArgType::Ptr),
+            ("len", ArgType::Size),
+            ("prot", ArgType::MmapProt),
+        ],
         ret: ArgType::Int,
     },
     SyscallDef {
@@ -128,7 +155,13 @@ pub static SYSCALL_TABLE: &[SyscallDef] = &[
     SyscallDef {
         number: 56,
         name: "clone",
-        args: &[("flags", ArgType::Uint), ("stack", ArgType::Ptr), ("parent_tid", ArgType::Ptr), ("child_tid", ArgType::Ptr), ("tls", ArgType::Ptr)],
+        args: &[
+            ("flags", ArgType::Uint),
+            ("stack", ArgType::Ptr),
+            ("parent_tid", ArgType::Ptr),
+            ("child_tid", ArgType::Ptr),
+            ("tls", ArgType::Ptr),
+        ],
         ret: ArgType::Int,
     },
     SyscallDef {
@@ -140,7 +173,11 @@ pub static SYSCALL_TABLE: &[SyscallDef] = &[
     SyscallDef {
         number: 59,
         name: "execve",
-        args: &[("filename", ArgType::StringPtr), ("argv", ArgType::Ptr), ("envp", ArgType::Ptr)],
+        args: &[
+            ("filename", ArgType::StringPtr),
+            ("argv", ArgType::Ptr),
+            ("envp", ArgType::Ptr),
+        ],
         ret: ArgType::Int,
     },
     SyscallDef {
@@ -152,7 +189,12 @@ pub static SYSCALL_TABLE: &[SyscallDef] = &[
     SyscallDef {
         number: 61,
         name: "wait4",
-        args: &[("pid", ArgType::Int), ("wstatus", ArgType::Ptr), ("options", ArgType::Uint), ("rusage", ArgType::Ptr)],
+        args: &[
+            ("pid", ArgType::Int),
+            ("wstatus", ArgType::Ptr),
+            ("options", ArgType::Uint),
+            ("rusage", ArgType::Ptr),
+        ],
         ret: ArgType::Int,
     },
     SyscallDef {
@@ -164,19 +206,33 @@ pub static SYSCALL_TABLE: &[SyscallDef] = &[
     SyscallDef {
         number: 38,
         name: "setitimer",
-        args: &[("which", ArgType::Uint), ("new_value", ArgType::Ptr), ("old_value", ArgType::Ptr)],
+        args: &[
+            ("which", ArgType::Uint),
+            ("new_value", ArgType::Ptr),
+            ("old_value", ArgType::Ptr),
+        ],
         ret: ArgType::Int,
     },
     SyscallDef {
         number: 13,
         name: "rt_sigaction",
-        args: &[("signum", ArgType::Signal), ("act", ArgType::Ptr), ("oldact", ArgType::Ptr), ("sigsetsize", ArgType::Size)],
+        args: &[
+            ("signum", ArgType::Signal),
+            ("act", ArgType::Ptr),
+            ("oldact", ArgType::Ptr),
+            ("sigsetsize", ArgType::Size),
+        ],
         ret: ArgType::Int,
     },
     SyscallDef {
         number: 14,
         name: "rt_sigprocmask",
-        args: &[("how", ArgType::Uint), ("set", ArgType::Ptr), ("oldset", ArgType::Ptr), ("sigsetsize", ArgType::Size)],
+        args: &[
+            ("how", ArgType::Uint),
+            ("set", ArgType::Ptr),
+            ("oldset", ArgType::Ptr),
+            ("sigsetsize", ArgType::Size),
+        ],
         ret: ArgType::Int,
     },
     SyscallDef {
@@ -194,13 +250,22 @@ pub static SYSCALL_TABLE: &[SyscallDef] = &[
     SyscallDef {
         number: 234,
         name: "tgkill",
-        args: &[("tgid", ArgType::Int), ("tid", ArgType::Int), ("sig", ArgType::Signal)],
+        args: &[
+            ("tgid", ArgType::Int),
+            ("tid", ArgType::Int),
+            ("sig", ArgType::Signal),
+        ],
         ret: ArgType::Int,
     },
     SyscallDef {
         number: 101,
         name: "ptrace",
-        args: &[("request", ArgType::Uint), ("pid", ArgType::Int), ("addr", ArgType::Ptr), ("data", ArgType::Ptr)],
+        args: &[
+            ("request", ArgType::Uint),
+            ("pid", ArgType::Int),
+            ("addr", ArgType::Ptr),
+            ("data", ArgType::Ptr),
+        ],
         ret: ArgType::Int,
     },
     SyscallDef {
@@ -218,19 +283,34 @@ pub static SYSCALL_TABLE: &[SyscallDef] = &[
     SyscallDef {
         number: 257,
         name: "openat",
-        args: &[("dirfd", ArgType::Fd), ("pathname", ArgType::StringPtr), ("flags", ArgType::OpenFlags), ("mode", ArgType::FileMode)],
+        args: &[
+            ("dirfd", ArgType::Fd),
+            ("pathname", ArgType::StringPtr),
+            ("flags", ArgType::OpenFlags),
+            ("mode", ArgType::FileMode),
+        ],
         ret: ArgType::Fd,
     },
     SyscallDef {
         number: 262,
         name: "newfstatat",
-        args: &[("dirfd", ArgType::Fd), ("pathname", ArgType::StringPtr), ("statbuf", ArgType::Ptr), ("flag", ArgType::Uint)],
+        args: &[
+            ("dirfd", ArgType::Fd),
+            ("pathname", ArgType::StringPtr),
+            ("statbuf", ArgType::Ptr),
+            ("flag", ArgType::Uint),
+        ],
         ret: ArgType::Int,
     },
     SyscallDef {
         number: 302,
         name: "prlimit64",
-        args: &[("pid", ArgType::Int), ("resource", ArgType::Uint), ("new_rlim", ArgType::Ptr), ("old_rlim", ArgType::Ptr)],
+        args: &[
+            ("pid", ArgType::Int),
+            ("resource", ArgType::Uint),
+            ("new_rlim", ArgType::Ptr),
+            ("old_rlim", ArgType::Ptr),
+        ],
         ret: ArgType::Int,
     },
 ];
@@ -257,15 +337,13 @@ where
             }
         }
         ArgType::Uint => format!("{}", value),
-        ArgType::Fd => {
-            match value as i32 {
-                0 => "0<stdin>".to_string(),
-                1 => "1<stdout>".to_string(),
-                2 => "2<stderr>".to_string(),
-                -100 => "AT_FDCWD".to_string(),
-                n => format!("{}", n),
-            }
-        }
+        ArgType::Fd => match value as i32 {
+            0 => "0<stdin>".to_string(),
+            1 => "1<stdout>".to_string(),
+            2 => "2<stderr>".to_string(),
+            -100 => "AT_FDCWD".to_string(),
+            n => format!("{}", n),
+        },
         ArgType::Ptr => {
             if value == 0 {
                 "NULL".to_string()
@@ -295,27 +373,23 @@ where
         ArgType::FileMode => format!("0{:o}", value),
         ArgType::MmapProt => format_mmap_prot(value as u32),
         ArgType::MmapFlags => format_mmap_flags(value as u32),
-        ArgType::Signal => {
-            match value {
-                1 => "SIGHUP".to_string(),
-                2 => "SIGINT".to_string(),
-                3 => "SIGQUIT".to_string(),
-                6 => "SIGABRT".to_string(),
-                9 => "SIGKILL".to_string(),
-                11 => "SIGSEGV".to_string(),
-                13 => "SIGPIPE".to_string(),
-                14 => "SIGALRM".to_string(),
-                15 => "SIGTERM".to_string(),
-                n => format!("{}", n),
-            }
-        }
-        ArgType::ClockId => {
-            match value {
-                0 => "CLOCK_REALTIME".to_string(),
-                1 => "CLOCK_MONOTONIC".to_string(),
-                n => format!("{}", n),
-            }
-        }
+        ArgType::Signal => match value {
+            1 => "SIGHUP".to_string(),
+            2 => "SIGINT".to_string(),
+            3 => "SIGQUIT".to_string(),
+            6 => "SIGABRT".to_string(),
+            9 => "SIGKILL".to_string(),
+            11 => "SIGSEGV".to_string(),
+            13 => "SIGPIPE".to_string(),
+            14 => "SIGALRM".to_string(),
+            15 => "SIGTERM".to_string(),
+            n => format!("{}", n),
+        },
+        ArgType::ClockId => match value {
+            0 => "CLOCK_REALTIME".to_string(),
+            1 => "CLOCK_MONOTONIC".to_string(),
+            n => format!("{}", n),
+        },
         ArgType::Unused => "?".to_string(),
     }
 }
@@ -330,12 +404,24 @@ fn format_open_flags(flags: u32) -> String {
         2 => parts.push("O_RDWR"),
         _ => {}
     }
-    if flags & 0x40 != 0 { parts.push("O_CREAT"); }
-    if flags & 0x80 != 0 { parts.push("O_EXCL"); }
-    if flags & 0x200 != 0 { parts.push("O_TRUNC"); }
-    if flags & 0x400 != 0 { parts.push("O_APPEND"); }
-    if flags & 0x800 != 0 { parts.push("O_NONBLOCK"); }
-    if flags & 0x80000 != 0 { parts.push("O_CLOEXEC"); }
+    if flags & 0x40 != 0 {
+        parts.push("O_CREAT");
+    }
+    if flags & 0x80 != 0 {
+        parts.push("O_EXCL");
+    }
+    if flags & 0x200 != 0 {
+        parts.push("O_TRUNC");
+    }
+    if flags & 0x400 != 0 {
+        parts.push("O_APPEND");
+    }
+    if flags & 0x800 != 0 {
+        parts.push("O_NONBLOCK");
+    }
+    if flags & 0x80000 != 0 {
+        parts.push("O_CLOEXEC");
+    }
 
     if parts.is_empty() {
         format!("0x{:x}", flags)
@@ -350,19 +436,33 @@ fn format_mmap_prot(prot: u32) -> String {
         return "PROT_NONE".to_string();
     }
     let mut parts = Vec::new();
-    if prot & 0x1 != 0 { parts.push("PROT_READ"); }
-    if prot & 0x2 != 0 { parts.push("PROT_WRITE"); }
-    if prot & 0x4 != 0 { parts.push("PROT_EXEC"); }
+    if prot & 0x1 != 0 {
+        parts.push("PROT_READ");
+    }
+    if prot & 0x2 != 0 {
+        parts.push("PROT_WRITE");
+    }
+    if prot & 0x4 != 0 {
+        parts.push("PROT_EXEC");
+    }
     parts.join("|")
 }
 
 /// Format mmap flags.
 fn format_mmap_flags(flags: u32) -> String {
     let mut parts = Vec::new();
-    if flags & 0x01 != 0 { parts.push("MAP_SHARED"); }
-    if flags & 0x02 != 0 { parts.push("MAP_PRIVATE"); }
-    if flags & 0x10 != 0 { parts.push("MAP_FIXED"); }
-    if flags & 0x20 != 0 { parts.push("MAP_ANONYMOUS"); }
+    if flags & 0x01 != 0 {
+        parts.push("MAP_SHARED");
+    }
+    if flags & 0x02 != 0 {
+        parts.push("MAP_PRIVATE");
+    }
+    if flags & 0x10 != 0 {
+        parts.push("MAP_FIXED");
+    }
+    if flags & 0x20 != 0 {
+        parts.push("MAP_ANONYMOUS");
+    }
     if parts.is_empty() {
         format!("0x{:x}", flags)
     } else {
@@ -371,11 +471,7 @@ fn format_mmap_flags(flags: u32) -> String {
 }
 
 /// Format a complete syscall entry with decoded arguments.
-pub fn format_syscall_entry<F>(
-    number: u64,
-    args: &[u64; 6],
-    read_string: &F,
-) -> String
+pub fn format_syscall_entry<F>(number: u64, args: &[u64; 6], read_string: &F) -> String
 where
     F: Fn(u64) -> Result<String>,
 {

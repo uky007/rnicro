@@ -176,7 +176,10 @@ pub fn build_prstatus(signal: u32, pid: u32, registers: &[u64]) -> Vec<u8> {
 /// Build the NT_FILE note descriptor from mapped file information.
 pub fn build_file_note(mappings: &[(u64, u64, u64, &str)]) -> Vec<u8> {
     // Filter to only file-backed mappings
-    let file_mappings: Vec<_> = mappings.iter().filter(|(_, _, _, p)| !p.is_empty()).collect();
+    let file_mappings: Vec<_> = mappings
+        .iter()
+        .filter(|(_, _, _, p)| !p.is_empty())
+        .collect();
 
     let count = file_mappings.len() as u64;
     let page_size: u64 = 4096;
@@ -245,14 +248,7 @@ pub fn generate(info: &CoreDumpInfo) -> Result<Vec<u8>> {
     let mut phdrs = Vec::new();
 
     // PT_NOTE
-    phdrs.push(serialize_phdr(
-        PT_NOTE,
-        0,
-        notes_offset,
-        0,
-        notes_size,
-        0,
-    ));
+    phdrs.push(serialize_phdr(PT_NOTE, 0, notes_offset, 0, notes_size, 0));
 
     // PT_LOAD for each mapping
     let mut load_offsets = Vec::new();
@@ -328,18 +324,12 @@ mod tests {
     #[test]
     fn phdr_format() {
         let phdr = serialize_phdr(PT_LOAD, PF_R | PF_W, 0x1000, 0x400000, 0x2000, 0x3000);
-        assert_eq!(
-            u32::from_le_bytes(phdr[0..4].try_into().unwrap()),
-            PT_LOAD
-        );
+        assert_eq!(u32::from_le_bytes(phdr[0..4].try_into().unwrap()), PT_LOAD);
         assert_eq!(
             u32::from_le_bytes(phdr[4..8].try_into().unwrap()),
             PF_R | PF_W
         );
-        assert_eq!(
-            u64::from_le_bytes(phdr[8..16].try_into().unwrap()),
-            0x1000
-        );
+        assert_eq!(u64::from_le_bytes(phdr[8..16].try_into().unwrap()), 0x1000);
         assert_eq!(
             u64::from_le_bytes(phdr[16..24].try_into().unwrap()),
             0x400000

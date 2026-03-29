@@ -56,8 +56,8 @@ impl DwarfInfo {
     /// (so the `DwarfInfo` owns all its data with no lifetime constraints),
     /// and builds an `addr2line::Context` for efficient lookups.
     pub fn load(path: &Path) -> Result<Self> {
-        let data = std::fs::read(path)
-            .map_err(|e| Error::Other(format!("read ELF for DWARF: {}", e)))?;
+        let data =
+            std::fs::read(path).map_err(|e| Error::Other(format!("read ELF for DWARF: {}", e)))?;
         let obj = object::File::parse(&*data)
             .map_err(|e| Error::Other(format!("parse ELF for DWARF: {}", e)))?;
 
@@ -173,10 +173,9 @@ impl DwarfInfo {
                     if let Some(file_entry) = row.file(program.header()) {
                         let mut path_buf = String::new();
                         if let Some(dir) = file_entry.directory(program.header()) {
-                            if let Ok(dir_reader) =
-                                self.dwarf.attr_string(&unit, dir)
-                            {
-                                let dir_slice = dir_reader.to_slice()
+                            if let Ok(dir_reader) = self.dwarf.attr_string(&unit, dir) {
+                                let dir_slice = dir_reader
+                                    .to_slice()
                                     .map_err(|e| Error::Other(format!("DWARF dir slice: {}", e)))?;
                                 let s = String::from_utf8_lossy(&dir_slice);
                                 if !s.is_empty() {
@@ -188,7 +187,8 @@ impl DwarfInfo {
                         if let Ok(name_reader) =
                             self.dwarf.attr_string(&unit, file_entry.path_name())
                         {
-                            let name_slice = name_reader.to_slice()
+                            let name_slice = name_reader
+                                .to_slice()
                                 .map_err(|e| Error::Other(format!("DWARF name slice: {}", e)))?;
                             let s = String::from_utf8_lossy(&name_slice);
                             path_buf.push_str(&s);

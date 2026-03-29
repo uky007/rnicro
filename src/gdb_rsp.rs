@@ -26,7 +26,10 @@ pub fn encode_packet(data: &str) -> Vec<u8> {
 /// Expects input starting with '$' and ending with '#XX'.
 pub fn decode_packet(raw: &[u8]) -> Option<(String, usize)> {
     let start = raw.iter().position(|&b| b == b'$')?;
-    let hash_pos = raw[start..].iter().position(|&b| b == b'#').map(|p| p + start)?;
+    let hash_pos = raw[start..]
+        .iter()
+        .position(|&b| b == b'#')
+        .map(|p| p + start)?;
 
     if hash_pos + 3 > raw.len() {
         return None; // Incomplete checksum
@@ -73,9 +76,8 @@ pub fn parse_hex_addr(s: &str) -> Option<u64> {
 ///
 /// GDB expects registers in this specific order for 'g' and 'G' packets.
 pub const GDB_X86_64_REGS: &[&str] = &[
-    "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
-    "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
-    "rip", "eflags", "cs", "ss", "ds", "es", "fs", "gs",
+    "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "r8", "r9", "r10", "r11", "r12", "r13",
+    "r14", "r15", "rip", "eflags", "cs", "ss", "ds", "es", "fs", "gs",
 ];
 
 // ── Protocol response helpers ────────────────────────────────────
@@ -371,20 +373,36 @@ mod tests {
     }
 
     impl GdbHandler for MockHandler {
-        fn stop_signal(&self) -> u8 { self.signal }
-        fn current_tid(&self) -> u32 { 1234 }
+        fn stop_signal(&self) -> u8 {
+            self.signal
+        }
+        fn current_tid(&self) -> u32 {
+            1234
+        }
         fn read_registers_gdb(&self) -> Result<String> {
             Ok("0".repeat(24 * 16)) // 24 regs * 8 bytes * 2 hex chars
         }
-        fn write_registers_gdb(&mut self, _hex: &str) -> Result<()> { Ok(()) }
+        fn write_registers_gdb(&mut self, _hex: &str) -> Result<()> {
+            Ok(())
+        }
         fn read_memory(&self, _addr: u64, len: usize) -> Result<Vec<u8>> {
             Ok(vec![0x90; len])
         }
-        fn write_memory(&mut self, _addr: u64, _data: &[u8]) -> Result<()> { Ok(()) }
-        fn continue_execution(&mut self) -> Result<u8> { Ok(5) }
-        fn single_step(&mut self) -> Result<u8> { Ok(5) }
-        fn insert_breakpoint(&mut self, _addr: u64) -> Result<()> { Ok(()) }
-        fn remove_breakpoint(&mut self, _addr: u64) -> Result<()> { Ok(()) }
+        fn write_memory(&mut self, _addr: u64, _data: &[u8]) -> Result<()> {
+            Ok(())
+        }
+        fn continue_execution(&mut self) -> Result<u8> {
+            Ok(5)
+        }
+        fn single_step(&mut self) -> Result<u8> {
+            Ok(5)
+        }
+        fn insert_breakpoint(&mut self, _addr: u64) -> Result<()> {
+            Ok(())
+        }
+        fn remove_breakpoint(&mut self, _addr: u64) -> Result<()> {
+            Ok(())
+        }
         fn kill(&mut self) {}
         fn detach(&mut self) {}
     }

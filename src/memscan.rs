@@ -104,8 +104,7 @@ pub fn diff_scan(data: &[u8], previous_offsets: &[usize], new_value: &[u8]) -> V
         .iter()
         .copied()
         .filter(|&off| {
-            off + new_value.len() <= data.len()
-                && &data[off..off + new_value.len()] == new_value
+            off + new_value.len() <= data.len() && &data[off..off + new_value.len()] == new_value
         })
         .collect()
 }

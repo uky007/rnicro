@@ -48,7 +48,10 @@ pub struct EvalContext<'a> {
 impl<'a> EvalContext<'a> {
     fn register_value(&self, reg: gimli::Register) -> Option<u64> {
         let num = reg.0;
-        self.registers.iter().find(|(r, _)| *r == num).map(|(_, v)| *v)
+        self.registers
+            .iter()
+            .find(|(r, _)| *r == num)
+            .map(|(_, v)| *v)
     }
 }
 
@@ -65,21 +68,26 @@ pub fn evaluate(
     let mut eval = Evaluation::new_in(slice, encoding);
     eval.set_initial_value(0);
 
-    let mut result = eval.evaluate()
+    let mut result = eval
+        .evaluate()
         .map_err(|e| Error::Other(format!("DWARF eval start: {}", e)))?;
 
     loop {
         match result {
             EvaluationResult::Complete => break,
 
-            EvaluationResult::RequiresRegister { register, base_type: _ } => {
+            EvaluationResult::RequiresRegister {
+                register,
+                base_type: _,
+            } => {
                 let val = ctx.register_value(register).ok_or_else(|| {
                     Error::Other(format!(
                         "DWARF expr needs register {} but not available",
                         register.0
                     ))
                 })?;
-                result = eval.resume_with_register(Value::Generic(val))
+                result = eval
+                    .resume_with_register(Value::Generic(val))
                     .map_err(|e| Error::Other(format!("DWARF eval register: {}", e)))?;
             }
 
@@ -87,19 +95,22 @@ pub fn evaluate(
                 let fb = ctx.frame_base.ok_or_else(|| {
                     Error::Other("DWARF expr needs frame base but not available".into())
                 })?;
-                result = eval.resume_with_frame_base(fb)
+                result = eval
+                    .resume_with_frame_base(fb)
                     .map_err(|e| Error::Other(format!("DWARF eval frame_base: {}", e)))?;
             }
 
             EvaluationResult::RequiresMemory { address, size, .. } => {
                 let data = (ctx.read_memory)(address, size as usize)?;
                 let val = read_bytes_as_u64(&data);
-                result = eval.resume_with_memory(Value::Generic(val))
+                result = eval
+                    .resume_with_memory(Value::Generic(val))
                     .map_err(|e| Error::Other(format!("DWARF eval memory: {}", e)))?;
             }
 
             EvaluationResult::RequiresCallFrameCfa => {
-                result = eval.resume_with_call_frame_cfa(ctx.cfa)
+                result = eval
+                    .resume_with_call_frame_cfa(ctx.cfa)
                     .map_err(|e| Error::Other(format!("DWARF eval CFA: {}", e)))?;
             }
 
@@ -113,7 +124,8 @@ pub fn evaluate(
 
             EvaluationResult::RequiresRelocatedAddress(addr) => {
                 // For non-PIE or already-relocated addresses, pass through.
-                result = eval.resume_with_relocated_address(addr)
+                result = eval
+                    .resume_with_relocated_address(addr)
                     .map_err(|e| Error::Other(format!("DWARF eval reloc: {}", e)))?;
             }
 
@@ -124,15 +136,11 @@ pub fn evaluate(
             }
 
             EvaluationResult::RequiresBaseType(_) => {
-                return Err(Error::Other(
-                    "DWARF typed expressions not supported".into(),
-                ));
+                return Err(Error::Other("DWARF typed expressions not supported".into()));
             }
 
             EvaluationResult::RequiresEntryValue(_) => {
-                return Err(Error::Other(
-                    "DWARF DW_OP_entry_value not supported".into(),
-                ));
+                return Err(Error::Other("DWARF DW_OP_entry_value not supported".into()));
             }
 
             EvaluationResult::RequiresParameterRef(_) => {

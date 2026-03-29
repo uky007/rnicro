@@ -68,15 +68,13 @@ use std::collections::HashMap;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
-use dap::events::{
-    Event, ExitedEventBody, OutputEventBody, StoppedEventBody, ThreadEventBody,
-};
+use dap::events::{Event, ExitedEventBody, OutputEventBody, StoppedEventBody, ThreadEventBody};
 use dap::prelude::*;
 use dap::requests::Command;
 use dap::responses::{Response, ResponseBody};
 use dap::types::{
-    Breakpoint, Capabilities, DisassembledInstruction, ExceptionBreakpointsFilter, Scope,
-    Source, StackFrame, Thread,
+    Breakpoint, Capabilities, DisassembledInstruction, ExceptionBreakpointsFilter, Scope, Source,
+    StackFrame, Thread,
 };
 
 use crate::antidebug;
@@ -84,9 +82,9 @@ use crate::checksec::{self, ChecksecResult, SecurityStatus};
 use crate::disasm::DisasmStyle;
 use crate::dwarf::DwarfInfo;
 use crate::error::Result;
+use crate::rust_type;
 use crate::target::Target;
 use crate::types::{StopReason, VirtAddr};
-use crate::rust_type;
 use crate::variables::{self, TypeKind, Variable};
 use crate::watchpoint::{WatchpointSize, WatchpointType};
 
@@ -206,9 +204,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
                 Command::Disassemble(args) => self.handle_disassemble(seq, args),
                 Command::ReadMemory(args) => self.handle_read_memory(seq, args),
                 Command::WriteMemory(args) => self.handle_write_memory(seq, args),
-                Command::SetDataBreakpoints(args) => {
-                    self.handle_set_data_breakpoints(seq, args)
-                }
+                Command::SetDataBreakpoints(args) => self.handle_set_data_breakpoints(seq, args),
                 Command::SetInstructionBreakpoints(args) => {
                     self.handle_set_instruction_breakpoints(seq, args)
                 }
@@ -436,12 +432,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
         seq: i64,
         args: &dap::requests::SetBreakpointsArguments,
     ) -> Result<()> {
-        let source_path = args
-            .source
-            .path
-            .as_deref()
-            .unwrap_or("")
-            .to_string();
+        let source_path = args.source.path.as_deref().unwrap_or("").to_string();
 
         // Remove old breakpoints for this source file.
         let old_keys: Vec<(String, i64)> = self
@@ -590,11 +581,9 @@ impl<R: Read, W: Write> DapServer<R, W> {
 
         self.send_ok(
             seq,
-            ResponseBody::SetFunctionBreakpoints(
-                dap::responses::SetFunctionBreakpointsResponse {
-                    breakpoints: result_bps,
-                },
-            ),
+            ResponseBody::SetFunctionBreakpoints(dap::responses::SetFunctionBreakpointsResponse {
+                breakpoints: result_bps,
+            }),
         );
         Ok(())
     }
@@ -605,8 +594,8 @@ impl<R: Read, W: Write> DapServer<R, W> {
         args: &dap::requests::SetExceptionBreakpointsArguments,
     ) -> Result<()> {
         if let Some(ref mut target) = self.target {
-            use nix::sys::signal::Signal;
             use crate::target::SignalPolicy;
+            use nix::sys::signal::Signal;
 
             for filter in &args.filters {
                 match filter.as_str() {
@@ -657,11 +646,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
         Ok(())
     }
 
-    fn handle_continue(
-        &mut self,
-        seq: i64,
-        args: &dap::requests::ContinueArguments,
-    ) -> Result<()> {
+    fn handle_continue(&mut self, seq: i64, args: &dap::requests::ContinueArguments) -> Result<()> {
         if self.target.is_none() {
             self.send_error(seq, "no active debug target");
             return Ok(());
@@ -692,27 +677,15 @@ impl<R: Read, W: Write> DapServer<R, W> {
         Ok(())
     }
 
-    fn handle_next(
-        &mut self,
-        seq: i64,
-        args: &dap::requests::NextArguments,
-    ) -> Result<()> {
+    fn handle_next(&mut self, seq: i64, args: &dap::requests::NextArguments) -> Result<()> {
         self.do_step(seq, "next", args.thread_id)
     }
 
-    fn handle_step_in(
-        &mut self,
-        seq: i64,
-        args: &dap::requests::StepInArguments,
-    ) -> Result<()> {
+    fn handle_step_in(&mut self, seq: i64, args: &dap::requests::StepInArguments) -> Result<()> {
         self.do_step(seq, "stepIn", args.thread_id)
     }
 
-    fn handle_step_out(
-        &mut self,
-        seq: i64,
-        args: &dap::requests::StepOutArguments,
-    ) -> Result<()> {
+    fn handle_step_out(&mut self, seq: i64, args: &dap::requests::StepOutArguments) -> Result<()> {
         self.do_step(seq, "stepOut", args.thread_id)
     }
 
@@ -756,11 +729,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
         Ok(())
     }
 
-    fn handle_pause(
-        &mut self,
-        seq: i64,
-        args: &dap::requests::PauseArguments,
-    ) -> Result<()> {
+    fn handle_pause(&mut self, seq: i64, args: &dap::requests::PauseArguments) -> Result<()> {
         if self.target.is_some() {
             use nix::sys::signal;
             let tid = Pid::from_raw(args.thread_id as i32);
@@ -810,10 +779,8 @@ impl<R: Read, W: Write> DapServer<R, W> {
 
         match self.target.as_ref().unwrap().backtrace() {
             Ok(frames) => {
-                let stack_frames: Vec<StackFrame> = frames
-                    .iter()
-                    .map(|f| format_stack_frame(f))
-                    .collect();
+                let stack_frames: Vec<StackFrame> =
+                    frames.iter().map(|f| format_stack_frame(f)).collect();
                 let total = stack_frames.len() as i64;
                 self.send_ok(
                     seq,
@@ -830,11 +797,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
         Ok(())
     }
 
-    fn handle_scopes(
-        &mut self,
-        seq: i64,
-        args: &dap::requests::ScopesArguments,
-    ) -> Result<()> {
+    fn handle_scopes(&mut self, seq: i64, args: &dap::requests::ScopesArguments) -> Result<()> {
         let locals_ref = self.alloc_var_ref();
         self.variable_refs
             .insert(locals_ref, VariableScope::Locals(args.frame_id));
@@ -912,11 +875,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
         Ok(())
     }
 
-    fn handle_evaluate(
-        &mut self,
-        seq: i64,
-        args: &dap::requests::EvaluateArguments,
-    ) -> Result<()> {
+    fn handle_evaluate(&mut self, seq: i64, args: &dap::requests::EvaluateArguments) -> Result<()> {
         let target = match self.target.as_ref() {
             Some(t) => t,
             None => {
@@ -965,7 +924,10 @@ impl<R: Read, W: Write> DapServer<R, W> {
 
         let addr = match parse_address(&args.memory_reference) {
             Ok(a) => a,
-            Err(e) => { self.send_error(seq, &e); return Ok(()); }
+            Err(e) => {
+                self.send_error(seq, &e);
+                return Ok(());
+            }
         };
         let offset = args.instruction_offset.unwrap_or(0) as i64;
         if args.instruction_count < 0 {
@@ -999,9 +961,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
 
                 self.send_ok(
                     seq,
-                    ResponseBody::Disassemble(dap::responses::DisassembleResponse {
-                        instructions,
-                    }),
+                    ResponseBody::Disassemble(dap::responses::DisassembleResponse { instructions }),
                 );
             }
             Err(e) => {
@@ -1026,7 +986,10 @@ impl<R: Read, W: Write> DapServer<R, W> {
 
         let addr = match parse_address(&args.memory_reference) {
             Ok(a) => a,
-            Err(e) => { self.send_error(seq, &e); return Ok(()); }
+            Err(e) => {
+                self.send_error(seq, &e);
+                return Ok(());
+            }
         };
         let offset = args.offset.unwrap_or(0) as i64;
         let start = if offset >= 0 {
@@ -1075,7 +1038,10 @@ impl<R: Read, W: Write> DapServer<R, W> {
 
         let addr = match parse_address(&args.memory_reference) {
             Ok(a) => a,
-            Err(e) => { self.send_error(seq, &e); return Ok(()); }
+            Err(e) => {
+                self.send_error(seq, &e);
+                return Ok(());
+            }
         };
         let offset = args.offset.unwrap_or(0) as i64;
         let start = if offset >= 0 {
@@ -1358,9 +1324,8 @@ impl<R: Read, W: Write> DapServer<R, W> {
                 let data_result = target.read_variable_data(&var.name);
                 match data_result {
                     Ok(Some((_, data))) => {
-                        let read_mem = |addr: u64, len: usize| {
-                            target.read_memory(VirtAddr(addr), len)
-                        };
+                        let read_mem =
+                            |addr: u64, len: usize| target.read_memory(VirtAddr(addr), len);
                         let formatted =
                             rust_type::format_rust_value(&data, &var.type_info, &read_mem)
                                 .unwrap_or_else(|| variables::format_value(&data, &var.type_info));
@@ -1459,15 +1424,9 @@ impl<R: Read, W: Write> DapServer<R, W> {
                     if end <= data.len() {
                         match dsize {
                             1 => Some(data[start] as u64),
-                            2 => Some(u16::from_le_bytes(
-                                data[start..end].try_into().ok()?,
-                            ) as u64),
-                            4 => Some(u32::from_le_bytes(
-                                data[start..end].try_into().ok()?,
-                            ) as u64),
-                            8 => Some(u64::from_le_bytes(
-                                data[start..end].try_into().ok()?,
-                            )),
+                            2 => Some(u16::from_le_bytes(data[start..end].try_into().ok()?) as u64),
+                            4 => Some(u32::from_le_bytes(data[start..end].try_into().ok()?) as u64),
+                            8 => Some(u64::from_le_bytes(data[start..end].try_into().ok()?)),
                             _ => None,
                         }
                     } else {
@@ -1498,10 +1457,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
                                         let start = m.offset as usize + f.offset as usize;
                                         let end = start + f.type_info.byte_size as usize;
                                         let value = if end <= data.len() {
-                                            variables::format_value(
-                                                &data[start..end],
-                                                &f.type_info,
-                                            )
+                                            variables::format_value(&data[start..end], &f.type_info)
                                         } else {
                                             "<?>".into()
                                         };
@@ -1649,13 +1605,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
 /// Convert a BacktraceFrame to a DAP StackFrame.
 fn format_stack_frame(frame: &crate::target::BacktraceFrame) -> StackFrame {
     let source = frame.location.as_ref().map(|loc| Source {
-        name: Some(
-            loc.file
-                .rsplit('/')
-                .next()
-                .unwrap_or(&loc.file)
-                .to_string(),
-        ),
+        name: Some(loc.file.rsplit('/').next().unwrap_or(&loc.file).to_string()),
         path: Some(loc.file.clone()),
         ..Default::default()
     });
@@ -1703,7 +1653,10 @@ const MAX_INSTRUCTION_COUNT: usize = 10_000;
 /// Parse a hex address string (with optional "0x" prefix) to u64.
 /// Returns an error for malformed input instead of silently falling back to 0.
 fn parse_address(s: &str) -> std::result::Result<u64, String> {
-    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    let s = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
     u64::from_str_radix(s, 16).map_err(|_| format!("invalid address: {:?}", s))
 }
 
@@ -1748,10 +1701,16 @@ fn format_checksec(result: &ChecksecResult, path: &str) -> String {
 
 /// Format anti-debug findings for DAP output.
 fn format_antidebug(findings: &[antidebug::AntiDebugFinding]) -> String {
-    let mut out = format!("[Security] anti-debug techniques detected ({}):", findings.len());
+    let mut out = format!(
+        "[Security] anti-debug techniques detected ({}):",
+        findings.len()
+    );
     for f in findings {
         if f.addr != 0 {
-            out.push_str(&format!("\n  {} at 0x{:x}: {}", f.technique, f.addr, f.description));
+            out.push_str(&format!(
+                "\n  {} at 0x{:x}: {}",
+                f.technique, f.addr, f.description
+            ));
         } else {
             out.push_str(&format!("\n  {}: {}", f.technique, f.description));
         }
@@ -1777,9 +1736,7 @@ mod tests {
             "step"
         );
         assert_eq!(
-            stop_reason_to_stopped_reason(&StopReason::Signal(
-                nix::sys::signal::Signal::SIGSEGV
-            )),
+            stop_reason_to_stopped_reason(&StopReason::Signal(nix::sys::signal::Signal::SIGSEGV)),
             "exception"
         );
         assert_eq!(
@@ -1814,15 +1771,15 @@ mod tests {
             "terminated"
         );
         assert_eq!(
-            stop_reason_to_stopped_reason(&StopReason::ThreadCreated(
-                nix::unistd::Pid::from_raw(1234)
-            )),
+            stop_reason_to_stopped_reason(&StopReason::ThreadCreated(nix::unistd::Pid::from_raw(
+                1234
+            ))),
             "thread"
         );
         assert_eq!(
-            stop_reason_to_stopped_reason(&StopReason::ThreadExited(
-                nix::unistd::Pid::from_raw(1234)
-            )),
+            stop_reason_to_stopped_reason(&StopReason::ThreadExited(nix::unistd::Pid::from_raw(
+                1234
+            ))),
             "thread"
         );
     }
@@ -1879,17 +1836,11 @@ mod tests {
         assert_eq!(sf.name, "main");
         assert_eq!(sf.line, 42);
         assert_eq!(sf.column, 5);
-        assert_eq!(
-            sf.instruction_pointer_reference,
-            Some("0x401234".into())
-        );
+        assert_eq!(sf.instruction_pointer_reference, Some("0x401234".into()));
 
         let source = sf.source.unwrap();
         assert_eq!(source.name, Some("main.rs".into()));
-        assert_eq!(
-            source.path,
-            Some("/home/user/project/src/main.rs".into())
-        );
+        assert_eq!(source.path, Some("/home/user/project/src/main.rs".into()));
     }
 
     #[test]

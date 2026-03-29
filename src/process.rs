@@ -10,7 +10,7 @@
 use nix::sys::ptrace;
 use nix::sys::signal::Signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
-use nix::unistd::{fork, execvp, ForkResult, Pid};
+use nix::unistd::{execvp, fork, ForkResult, Pid};
 use std::ffi::CString;
 use std::path::Path;
 
@@ -103,9 +103,11 @@ impl Process {
     /// A pipe synchronizes the parent and child so that `traceme` is guaranteed
     /// to complete before the parent calls `waitpid` (Ch.4 pattern from sdb).
     pub fn launch(program: &Path, args: &[&str]) -> Result<Self> {
-        let prog = CString::new(program.to_str().ok_or_else(|| {
-            Error::Process("invalid program path".into())
-        })?)
+        let prog = CString::new(
+            program
+                .to_str()
+                .ok_or_else(|| Error::Process("invalid program path".into()))?,
+        )
         .map_err(|e| Error::Process(e.to_string()))?;
 
         let c_args: Vec<CString> = std::iter::once(Ok(prog.clone()))
@@ -158,8 +160,7 @@ impl Process {
                 // Set ptrace options for tracking clones/forks/execs and syscall stops
                 ptrace::setoptions(
                     child,
-                    ptrace::Options::PTRACE_O_TRACECLONE
-                        | ptrace::Options::PTRACE_O_TRACESYSGOOD,
+                    ptrace::Options::PTRACE_O_TRACECLONE | ptrace::Options::PTRACE_O_TRACESYSGOOD,
                 )?;
 
                 Ok(Process {
@@ -193,8 +194,7 @@ impl Process {
 
         ptrace::setoptions(
             pid,
-            ptrace::Options::PTRACE_O_TRACECLONE
-                | ptrace::Options::PTRACE_O_TRACESYSGOOD,
+            ptrace::Options::PTRACE_O_TRACECLONE | ptrace::Options::PTRACE_O_TRACESYSGOOD,
         )?;
 
         // Discover existing threads via /proc/pid/task
@@ -266,95 +266,92 @@ impl Process {
     /// Updates `current_tid` to the thread that stopped.
     pub fn wait_on_signal(&mut self) -> Result<StopReason> {
         loop {
-        let status = waitpid(
-            Pid::from_raw(-1),
-            Some(WaitPidFlag::__WALL),
-        )
-        .map_err(|e| Error::Process(format!("waitpid: {}", e)))?;
+            let status = waitpid(Pid::from_raw(-1), Some(WaitPidFlag::__WALL))
+                .map_err(|e| Error::Process(format!("waitpid: {}", e)))?;
 
-        // Extract which TID reported this event
-        let stopped_tid = match &status {
-            WaitStatus::Stopped(pid, _)
-            | WaitStatus::PtraceSyscall(pid)
-            | WaitStatus::PtraceEvent(pid, _, _)
-            | WaitStatus::Exited(pid, _)
-            | WaitStatus::Signaled(pid, _, _) => *pid,
-            _ => self.current_tid,
-        };
-        self.current_tid = stopped_tid;
+            // Extract which TID reported this event
+            let stopped_tid = match &status {
+                WaitStatus::Stopped(pid, _)
+                | WaitStatus::PtraceSyscall(pid)
+                | WaitStatus::PtraceEvent(pid, _, _)
+                | WaitStatus::Exited(pid, _)
+                | WaitStatus::Signaled(pid, _, _) => *pid,
+                _ => self.current_tid,
+            };
+            self.current_tid = stopped_tid;
 
-        let reason = match status {
-            WaitStatus::Stopped(tid, Signal::SIGTRAP) => {
-                self.state = ProcessState::Stopped;
-                self.classify_sigtrap_for(tid)?
-            }
-            WaitStatus::Stopped(_, sig) => {
-                self.state = ProcessState::Stopped;
-                StopReason::Signal(sig)
-            }
-            WaitStatus::Exited(tid, code) => {
-                // Remove the exited thread
-                self.threads.retain(|&t| t != tid);
-                if tid == self.pid {
-                    // Main thread exited
-                    self.state = ProcessState::Exited;
-                    self.is_attached = false;
-                    StopReason::Exited(code)
-                } else {
-                    StopReason::ThreadExited(tid)
+            let reason = match status {
+                WaitStatus::Stopped(tid, Signal::SIGTRAP) => {
+                    self.state = ProcessState::Stopped;
+                    self.classify_sigtrap_for(tid)?
                 }
-            }
-            WaitStatus::Signaled(tid, sig, _) => {
-                self.threads.retain(|&t| t != tid);
-                if tid == self.pid {
-                    self.state = ProcessState::Terminated;
-                    self.is_attached = false;
-                    StopReason::Terminated(sig)
-                } else {
-                    StopReason::ThreadExited(tid)
+                WaitStatus::Stopped(_, sig) => {
+                    self.state = ProcessState::Stopped;
+                    StopReason::Signal(sig)
                 }
-            }
-            WaitStatus::PtraceSyscall(_) => {
-                self.state = ProcessState::Stopped;
-                self.classify_syscall()?
-            }
-            WaitStatus::PtraceEvent(tid, _, event) => {
-                self.state = ProcessState::Stopped;
-                if event == libc::PTRACE_EVENT_CLONE as i32 {
-                    let new_pid_raw = ptrace::getevent(tid)
-                        .map_err(|e| Error::Process(format!("getevent: {}", e)))?;
-                    let new_tid = Pid::from_raw(new_pid_raw as i32);
-
-                    // Wait for the new thread's initial SIGSTOP
-                    let _ = waitpid(new_tid, Some(WaitPidFlag::__WALL));
-
-                    // Configure ptrace options on the new thread
-                    let _ = ptrace::setoptions(
-                        new_tid,
-                        ptrace::Options::PTRACE_O_TRACECLONE
-                            | ptrace::Options::PTRACE_O_TRACESYSGOOD,
-                    );
-
-                    // Track the new thread
-                    if !self.threads.contains(&new_tid) {
-                        self.threads.push(new_tid);
+                WaitStatus::Exited(tid, code) => {
+                    // Remove the exited thread
+                    self.threads.retain(|&t| t != tid);
+                    if tid == self.pid {
+                        // Main thread exited
+                        self.state = ProcessState::Exited;
+                        self.is_attached = false;
+                        StopReason::Exited(code)
+                    } else {
+                        StopReason::ThreadExited(tid)
                     }
-
-                    // Resume the new thread so it can run
-                    let _ = ptrace::cont(new_tid, None);
-
-                    StopReason::ThreadCreated(new_tid)
-                } else {
-                    StopReason::SingleStep
                 }
-            }
-            WaitStatus::Continued(_) | WaitStatus::StillAlive => {
-                // Process is still running; re-wait.
-                continue;
-            }
-        };
+                WaitStatus::Signaled(tid, sig, _) => {
+                    self.threads.retain(|&t| t != tid);
+                    if tid == self.pid {
+                        self.state = ProcessState::Terminated;
+                        self.is_attached = false;
+                        StopReason::Terminated(sig)
+                    } else {
+                        StopReason::ThreadExited(tid)
+                    }
+                }
+                WaitStatus::PtraceSyscall(_) => {
+                    self.state = ProcessState::Stopped;
+                    self.classify_syscall()?
+                }
+                WaitStatus::PtraceEvent(tid, _, event) => {
+                    self.state = ProcessState::Stopped;
+                    if event == libc::PTRACE_EVENT_CLONE as i32 {
+                        let new_pid_raw = ptrace::getevent(tid)
+                            .map_err(|e| Error::Process(format!("getevent: {}", e)))?;
+                        let new_tid = Pid::from_raw(new_pid_raw as i32);
 
-        return Ok(reason);
+                        // Wait for the new thread's initial SIGSTOP
+                        let _ = waitpid(new_tid, Some(WaitPidFlag::__WALL));
+
+                        // Configure ptrace options on the new thread
+                        let _ = ptrace::setoptions(
+                            new_tid,
+                            ptrace::Options::PTRACE_O_TRACECLONE
+                                | ptrace::Options::PTRACE_O_TRACESYSGOOD,
+                        );
+
+                        // Track the new thread
+                        if !self.threads.contains(&new_tid) {
+                            self.threads.push(new_tid);
+                        }
+
+                        // Resume the new thread so it can run
+                        let _ = ptrace::cont(new_tid, None);
+
+                        StopReason::ThreadCreated(new_tid)
+                    } else {
+                        StopReason::SingleStep
+                    }
+                }
+                WaitStatus::Continued(_) | WaitStatus::StillAlive => {
+                    // Process is still running; re-wait.
+                    continue;
+                }
+            };
+
+            return Ok(reason);
         } // loop
     }
 

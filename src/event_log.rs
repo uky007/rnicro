@@ -5,7 +5,7 @@
 //! discoveries. Provides filtering and query APIs for analysis.
 
 use std::collections::HashSet;
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
 use crate::types::VirtAddr;
 
@@ -72,21 +72,13 @@ pub enum EventKind {
         size: usize,
     },
     /// Process exited.
-    ProcessExited {
-        code: i32,
-    },
+    ProcessExited { code: i32 },
     /// Process terminated by signal.
-    ProcessTerminated {
-        signal: String,
-    },
+    ProcessTerminated { signal: String },
     /// Thread created.
-    ThreadCreated {
-        tid: i32,
-    },
+    ThreadCreated { tid: i32 },
     /// Thread exited.
-    ThreadExited {
-        tid: i32,
-    },
+    ThreadExited { tid: i32 },
 }
 
 /// Classification of discovered secrets.
@@ -132,10 +124,18 @@ impl EventKind {
     /// Format this event as a one-line log string.
     pub fn format_oneline(&self) -> String {
         match self {
-            Self::SyscallEntry { name, args_formatted, .. } => {
+            Self::SyscallEntry {
+                name,
+                args_formatted,
+                ..
+            } => {
                 format!("syscall {} {}", name, args_formatted)
             }
-            Self::SyscallExit { name, retval_formatted, .. } => {
+            Self::SyscallExit {
+                name,
+                retval_formatted,
+                ..
+            } => {
                 format!("syscall {} = {}", name, retval_formatted)
             }
             Self::Signal { signal, addr } => {
@@ -145,17 +145,34 @@ impl EventKind {
                     format!("signal {}", signal)
                 }
             }
-            Self::BreakpointHit { addr, function, location } => {
+            Self::BreakpointHit {
+                addr,
+                function,
+                location,
+            } => {
                 let func = function.as_deref().unwrap_or("??");
                 let loc = location.as_deref().unwrap_or("");
                 format!("breakpoint {} {} {}", addr, func, loc)
             }
-            Self::AntiDebugDetected { technique, bypassed, detail, .. } => {
+            Self::AntiDebugDetected {
+                technique,
+                bypassed,
+                detail,
+                ..
+            } => {
                 let action = if *bypassed { "BYPASSED" } else { "DETECTED" };
                 format!("antidebug [{}] {} — {}", action, technique, detail)
             }
-            Self::SecretFound { addr, category, preview, size } => {
-                format!("secret [{}] {} bytes at {} — {}", category, size, addr, preview)
+            Self::SecretFound {
+                addr,
+                category,
+                preview,
+                size,
+            } => {
+                format!(
+                    "secret [{}] {} bytes at {} — {}",
+                    category, size, addr, preview
+                )
             }
             Self::ProcessExited { code } => format!("process exited ({})", code),
             Self::ProcessTerminated { signal } => format!("process terminated ({})", signal),
@@ -219,16 +236,14 @@ impl EventLog {
     /// Record an event. Returns the sequence number, or `None` if filtered out.
     pub fn record(&mut self, kind: EventKind) -> Option<u64> {
         // Category filter
-        if !self.config.categories.is_empty()
-            && !self.config.categories.contains(&kind.category())
+        if !self.config.categories.is_empty() && !self.config.categories.contains(&kind.category())
         {
             return None;
         }
 
         // Syscall exclusion filter
         match &kind {
-            EventKind::SyscallEntry { number, .. }
-            | EventKind::SyscallExit { number, .. } => {
+            EventKind::SyscallEntry { number, .. } | EventKind::SyscallExit { number, .. } => {
                 if self.config.excluded_syscalls.contains(number) {
                     return None;
                 }
@@ -374,17 +389,21 @@ mod tests {
         let mut log = EventLog::with_config(config);
 
         // Syscall should be recorded
-        assert!(log.record(EventKind::SyscallEntry {
-            number: 1,
-            name: "write".into(),
-            args_formatted: "()".into(),
-        }).is_some());
+        assert!(log
+            .record(EventKind::SyscallEntry {
+                number: 1,
+                name: "write".into(),
+                args_formatted: "()".into(),
+            })
+            .is_some());
 
         // Signal should be filtered out
-        assert!(log.record(EventKind::Signal {
-            signal: "SIGSEGV".into(),
-            addr: None,
-        }).is_none());
+        assert!(log
+            .record(EventKind::Signal {
+                signal: "SIGSEGV".into(),
+                addr: None,
+            })
+            .is_none());
 
         assert_eq!(log.len(), 1);
     }
@@ -398,18 +417,22 @@ mod tests {
         let mut log = EventLog::with_config(config);
 
         // clock_gettime should be excluded
-        assert!(log.record(EventKind::SyscallEntry {
-            number: 228,
-            name: "clock_gettime".into(),
-            args_formatted: "()".into(),
-        }).is_none());
+        assert!(log
+            .record(EventKind::SyscallEntry {
+                number: 228,
+                name: "clock_gettime".into(),
+                args_formatted: "()".into(),
+            })
+            .is_none());
 
         // write should pass
-        assert!(log.record(EventKind::SyscallEntry {
-            number: 1,
-            name: "write".into(),
-            args_formatted: "()".into(),
-        }).is_some());
+        assert!(log
+            .record(EventKind::SyscallEntry {
+                number: 1,
+                name: "write".into(),
+                args_formatted: "()".into(),
+            })
+            .is_some());
 
         assert_eq!(log.len(), 1);
     }
@@ -490,23 +513,49 @@ mod tests {
     #[test]
     fn event_category_classification() {
         assert_eq!(
-            EventKind::SyscallEntry { number: 0, name: "".into(), args_formatted: "".into() }.category(),
+            EventKind::SyscallEntry {
+                number: 0,
+                name: "".into(),
+                args_formatted: "".into()
+            }
+            .category(),
             EventCategory::Syscall
         );
         assert_eq!(
-            EventKind::Signal { signal: "".into(), addr: None }.category(),
+            EventKind::Signal {
+                signal: "".into(),
+                addr: None
+            }
+            .category(),
             EventCategory::Signal
         );
         assert_eq!(
-            EventKind::BreakpointHit { addr: VirtAddr(0), function: None, location: None }.category(),
+            EventKind::BreakpointHit {
+                addr: VirtAddr(0),
+                function: None,
+                location: None
+            }
+            .category(),
             EventCategory::Breakpoint
         );
         assert_eq!(
-            EventKind::AntiDebugDetected { technique: "".into(), addr: None, bypassed: false, detail: "".into() }.category(),
+            EventKind::AntiDebugDetected {
+                technique: "".into(),
+                addr: None,
+                bypassed: false,
+                detail: "".into()
+            }
+            .category(),
             EventCategory::AntiDebug
         );
         assert_eq!(
-            EventKind::SecretFound { addr: VirtAddr(0), category: SecretCategory::NewString, preview: "".into(), size: 0 }.category(),
+            EventKind::SecretFound {
+                addr: VirtAddr(0),
+                category: SecretCategory::NewString,
+                preview: "".into(),
+                size: 0
+            }
+            .category(),
             EventCategory::Secret
         );
     }

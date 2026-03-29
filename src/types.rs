@@ -57,20 +57,11 @@ pub enum StopReason {
     /// Received a signal (other than SIGTRAP).
     Signal(nix::sys::signal::Signal),
     /// Hit a hardware watchpoint.
-    WatchpointHit {
-        slot: usize,
-        addr: VirtAddr,
-    },
+    WatchpointHit { slot: usize, addr: VirtAddr },
     /// Stopped at a syscall entry.
-    SyscallEntry {
-        number: u64,
-        args: [u64; 6],
-    },
+    SyscallEntry { number: u64, args: [u64; 6] },
     /// Stopped at a syscall exit.
-    SyscallExit {
-        number: u64,
-        retval: i64,
-    },
+    SyscallExit { number: u64, retval: i64 },
     /// Process exited normally.
     Exited(i32),
     /// Process was killed by a signal.

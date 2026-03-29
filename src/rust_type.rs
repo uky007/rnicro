@@ -509,7 +509,11 @@ mod tests {
     fn demangle_strips_hash() {
         // The {:#} format should strip the hash suffix
         let result = demangle_symbol("_ZN3std2io5stdio6_print17h3c43e94d1e8a4b5eE");
-        assert!(!result.contains("::h"), "hash should be stripped: {}", result);
+        assert!(
+            !result.contains("::h"),
+            "hash should be stripped: {}",
+            result
+        );
     }
 
     // ── detect_rust_type tests ───────────────────────────────────────
@@ -517,10 +521,7 @@ mod tests {
     #[test]
     fn detect_vec() {
         assert_eq!(detect_rust_type("Vec<i32>"), Some(RustType::Vec));
-        assert_eq!(
-            detect_rust_type("alloc::vec::Vec<u8>"),
-            Some(RustType::Vec)
-        );
+        assert_eq!(detect_rust_type("alloc::vec::Vec<u8>"), Some(RustType::Vec));
     }
 
     #[test]
@@ -602,9 +603,7 @@ mod tests {
     // ── format_rust_value tests ──────────────────────────────────────
 
     /// Helper to create a mock memory reader from a map of address→data.
-    fn mock_reader(
-        memory: Vec<(u64, Vec<u8>)>,
-    ) -> impl Fn(u64, usize) -> Result<Vec<u8>> {
+    fn mock_reader(memory: Vec<(u64, Vec<u8>)>) -> impl Fn(u64, usize) -> Result<Vec<u8>> {
         move |addr: u64, len: usize| {
             for (base, data) in &memory {
                 let end = base + data.len() as u64;

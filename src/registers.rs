@@ -29,27 +29,111 @@ pub struct RegisterInfo {
 ///
 /// DWARF register numbers follow the System V AMD64 ABI.
 pub const REGISTERS: &[RegisterInfo] = &[
-    RegisterInfo { name: "rax",    dwarf_id: 0,  reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "rdx",    dwarf_id: 1,  reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "rcx",    dwarf_id: 2,  reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "rbx",    dwarf_id: 3,  reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "rsi",    dwarf_id: 4,  reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "rdi",    dwarf_id: 5,  reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "rbp",    dwarf_id: 6,  reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "rsp",    dwarf_id: 7,  reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "r8",     dwarf_id: 8,  reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "r9",     dwarf_id: 9,  reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "r10",    dwarf_id: 10, reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "r11",    dwarf_id: 11, reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "r12",    dwarf_id: 12, reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "r13",    dwarf_id: 13, reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "r14",    dwarf_id: 14, reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "r15",    dwarf_id: 15, reg_type: RegisterType::GeneralPurpose },
-    RegisterInfo { name: "rip",    dwarf_id: 16, reg_type: RegisterType::InstructionPointer },
-    RegisterInfo { name: "rflags", dwarf_id: 49, reg_type: RegisterType::Flags },
-    RegisterInfo { name: "cs",     dwarf_id: 51, reg_type: RegisterType::Segment },
-    RegisterInfo { name: "ss",     dwarf_id: 52, reg_type: RegisterType::Segment },
-    RegisterInfo { name: "orig_rax", dwarf_id: -1, reg_type: RegisterType::GeneralPurpose },
+    RegisterInfo {
+        name: "rax",
+        dwarf_id: 0,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "rdx",
+        dwarf_id: 1,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "rcx",
+        dwarf_id: 2,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "rbx",
+        dwarf_id: 3,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "rsi",
+        dwarf_id: 4,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "rdi",
+        dwarf_id: 5,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "rbp",
+        dwarf_id: 6,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "rsp",
+        dwarf_id: 7,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "r8",
+        dwarf_id: 8,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "r9",
+        dwarf_id: 9,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "r10",
+        dwarf_id: 10,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "r11",
+        dwarf_id: 11,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "r12",
+        dwarf_id: 12,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "r13",
+        dwarf_id: 13,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "r14",
+        dwarf_id: 14,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "r15",
+        dwarf_id: 15,
+        reg_type: RegisterType::GeneralPurpose,
+    },
+    RegisterInfo {
+        name: "rip",
+        dwarf_id: 16,
+        reg_type: RegisterType::InstructionPointer,
+    },
+    RegisterInfo {
+        name: "rflags",
+        dwarf_id: 49,
+        reg_type: RegisterType::Flags,
+    },
+    RegisterInfo {
+        name: "cs",
+        dwarf_id: 51,
+        reg_type: RegisterType::Segment,
+    },
+    RegisterInfo {
+        name: "ss",
+        dwarf_id: 52,
+        reg_type: RegisterType::Segment,
+    },
+    RegisterInfo {
+        name: "orig_rax",
+        dwarf_id: -1,
+        reg_type: RegisterType::GeneralPurpose,
+    },
 ];
 
 /// Snapshot of all x86_64 general-purpose registers.
@@ -154,8 +238,8 @@ impl Registers {
 
     /// Iterate over all register name-value pairs.
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, u64)> + '_ {
-        REGISTERS.iter().filter_map(move |info| {
-            self.get(info.name).ok().map(|v| (info.name, v))
-        })
+        REGISTERS
+            .iter()
+            .filter_map(move |info| self.get(info.name).ok().map(|v| (info.name, v)))
     }
 }
