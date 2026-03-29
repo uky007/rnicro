@@ -113,6 +113,8 @@ pub struct DapServer<R: Read, W: Write> {
     deferred_fn_bps: Vec<DeferredFunctionBreakpoint>,
     /// Instruction breakpoints (for replace-all semantics).
     instruction_breakpoints: Vec<VirtAddr>,
+    /// Number of event log entries already sent to the editor.
+    last_emitted_event: usize,
 }
 
 /// Describes the content behind a variablesReference.
@@ -162,6 +164,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
             deferred_source_bps: Vec::new(),
             deferred_fn_bps: Vec::new(),
             instruction_breakpoints: Vec::new(),
+            last_emitted_event: 0,
         }
     }
 
@@ -678,6 +681,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
                     }),
                 );
                 self.handle_stop_reason(&reason);
+                self.emit_automation_events();
             }
             Err(e) => {
                 self.send_error(seq, &format!("continue failed: {}", e));
@@ -730,6 +734,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
                 };
                 self.send_ok(seq, body);
                 self.handle_stop_reason(&reason);
+                self.emit_automation_events();
             }
             Err(e) => {
                 self.send_error(seq, &format!("{} failed: {}", kind, e));
@@ -884,6 +889,25 @@ impl<R: Read, W: Write> DapServer<R, W> {
     }
 
     fn handle_evaluate(&mut self, seq: i64, args: &dap::requests::EvaluateArguments) -> Result<()> {
+        let expr = args.expression.trim();
+
+        // Handle automation queries ($events, $bypass, $secrets)
+        if let Some(result) = self.evaluate_automation_query(expr) {
+            self.send_ok(
+                seq,
+                ResponseBody::Evaluate(dap::responses::EvaluateResponse {
+                    result,
+                    type_field: None,
+                    presentation_hint: None,
+                    variables_reference: 0,
+                    named_variables: None,
+                    indexed_variables: None,
+                    memory_reference: None,
+                }),
+            );
+            return Ok(());
+        }
+
         let target = match self.target.as_ref() {
             Some(t) => t,
             None => {
@@ -892,7 +916,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
             }
         };
 
-        match target.read_variable(&args.expression) {
+        match target.read_variable(expr) {
             Ok(Some((_var, formatted))) => {
                 self.send_ok(
                     seq,
@@ -908,13 +932,100 @@ impl<R: Read, W: Write> DapServer<R, W> {
                 );
             }
             Ok(None) => {
-                self.send_error(seq, &format!("variable '{}' not found", args.expression));
+                self.send_error(seq, &format!("variable '{}' not found", expr));
             }
             Err(e) => {
                 self.send_error(seq, &format!("evaluate failed: {}", e));
             }
         }
         Ok(())
+    }
+
+    /// Handle automation queries typed in the debug console.
+    fn evaluate_automation_query(&self, expr: &str) -> Option<String> {
+        let target = self.target.as_ref()?;
+        match expr {
+            "$events" => {
+                let log = target.event_log();
+                let n = log.len();
+                if n == 0 {
+                    return Some("no events recorded".into());
+                }
+                let last = log.last_n(20);
+                let mut lines = vec![format!("{} events total (last 20):", n)];
+                for e in last {
+                    lines.push(format!(
+                        "[{:>6}] {:>10.3}s  {}",
+                        e.seq,
+                        e.elapsed.as_secs_f64(),
+                        e.kind.format_oneline()
+                    ));
+                }
+                Some(lines.join("\n"))
+            }
+            "$bypass" => {
+                let engine = target.bypass_engine();
+                let stats = engine.stats();
+                let config = engine.config();
+                let lines = vec![
+                    "Anti-analysis bypass status:".into(),
+                    format!(
+                        "  ptrace: {} ({})",
+                        if config.bypass_ptrace { "ON" } else { "OFF" },
+                        stats.ptrace_bypassed
+                    ),
+                    format!(
+                        "  proc/status: {} ({})",
+                        if config.bypass_proc_status {
+                            "ON"
+                        } else {
+                            "OFF"
+                        },
+                        stats.proc_status_spoofed
+                    ),
+                    format!(
+                        "  timers: {} ({})",
+                        if config.neutralize_watchdog_timers {
+                            "ON"
+                        } else {
+                            "OFF"
+                        },
+                        stats.timers_neutralized
+                    ),
+                    format!(
+                        "  self-signals: {} ({})",
+                        if config.suppress_self_signals {
+                            "ON"
+                        } else {
+                            "OFF"
+                        },
+                        stats.self_signals_suppressed
+                    ),
+                ];
+                Some(lines.join("\n"))
+            }
+            "$secrets" => {
+                let findings = target.secret_scanner().findings();
+                if findings.is_empty() {
+                    return Some("no secrets found".into());
+                }
+                let mut lines = vec![format!("{} secrets found:", findings.len())];
+                for f in &findings {
+                    lines.push(format!(
+                        "  [{}] {} bytes at {}{}",
+                        f.category,
+                        f.size,
+                        f.addr,
+                        f.pattern_name
+                            .as_ref()
+                            .map(|p| format!(" ({})", p))
+                            .unwrap_or_default()
+                    ));
+                }
+                Some(lines.join("\n"))
+            }
+            _ => None,
+        }
     }
 
     fn handle_disassemble(
@@ -1540,6 +1651,38 @@ impl<R: Read, W: Write> DapServer<R, W> {
 
     fn resolve_source_line(&self, file: &str, line: u32) -> Option<VirtAddr> {
         self.dwarf.as_ref()?.find_address(file, line).ok()?
+    }
+
+    // ── Automation event emission ─────────────────────────────────────
+
+    /// Send new automation events (bypasses, secrets) to the editor's debug console.
+    /// Called after each stop event so the editor shows real-time updates.
+    fn emit_automation_events(&mut self) {
+        let target = match self.target.as_ref() {
+            Some(t) => t,
+            None => return,
+        };
+
+        let log = target.event_log();
+        let events = log.events();
+        let new_start = self.last_emitted_event;
+        if new_start >= events.len() {
+            return;
+        }
+
+        for event in &events[new_start..] {
+            let category = event.kind.category();
+            match category {
+                crate::event_log::EventCategory::AntiDebug => {
+                    let _ = self.send_output(&format!("[bypass] {}", event.kind.format_oneline()));
+                }
+                crate::event_log::EventCategory::Secret => {
+                    let _ = self.send_output(&format!("[secret] {}", event.kind.format_oneline()));
+                }
+                _ => {} // Syscalls/signals are already shown via stopped events
+            }
+        }
+        self.last_emitted_event = events.len();
     }
 
     // ── Response helpers ──────────────────────────────────────────────
@@ -2216,6 +2359,7 @@ mod tests {
         assert!(server.deferred_source_bps.is_empty());
         assert!(server.deferred_fn_bps.is_empty());
         assert!(server.instruction_breakpoints.is_empty());
+        assert_eq!(server.last_emitted_event, 0);
     }
 
     #[test]
