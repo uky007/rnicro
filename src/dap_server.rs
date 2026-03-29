@@ -80,7 +80,7 @@ use dap::types::{
 use nix::unistd::Pid;
 
 use crate::antidebug;
-use crate::checksec::{self, ChecksecResult, SecurityStatus};
+use crate::checksec::{self, ChecksecResult};
 use crate::disasm::DisasmStyle;
 use crate::dwarf::DwarfInfo;
 use crate::error::Result;
@@ -644,7 +644,14 @@ impl<R: Read, W: Write> DapServer<R, W> {
             }
         }
 
-        self.send_ok(seq, ResponseBody::SetExceptionBreakpoints);
+        self.send_ok(
+            seq,
+            ResponseBody::SetExceptionBreakpoints(
+                dap::responses::SetExceptionBreakpointsResponse {
+                    breakpoints: None,
+                },
+            ),
+        );
         Ok(())
     }
 

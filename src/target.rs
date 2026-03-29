@@ -23,7 +23,7 @@ use crate::procfs::{self, MemoryRegion};
 use crate::registers::{self, Registers};
 use crate::rop::{self, Gadget};
 use crate::rust_type;
-use crate::secret_scan::{SecretScanConfig, SecretScanner};
+use crate::secret_scan::SecretScanner;
 use crate::shared_lib::{self, SharedLibrary};
 use crate::strings::{self, ExtractedString};
 use crate::syscall_trace;
