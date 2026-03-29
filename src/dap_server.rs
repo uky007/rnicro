@@ -77,6 +77,8 @@ use dap::types::{
     StackFrame, Thread,
 };
 
+use nix::unistd::Pid;
+
 use crate::antidebug;
 use crate::checksec::{self, ChecksecResult, SecurityStatus};
 use crate::disasm::DisasmStyle;
@@ -1256,13 +1258,13 @@ impl<R: Read, W: Write> DapServer<R, W> {
                 self.send_stopped("data breakpoint", None);
             }
             StopReason::SyscallEntry { number, .. } => {
-                let name = crate::syscall::syscall_name(*number)
+                let name = crate::syscall::name(*number)
                     .unwrap_or("unknown")
                     .to_string();
                 self.send_stopped_with_text("exception", &format!("syscall entry: {}", name));
             }
             StopReason::SyscallExit { number, .. } => {
-                let name = crate::syscall::syscall_name(*number)
+                let name = crate::syscall::name(*number)
                     .unwrap_or("unknown")
                     .to_string();
                 self.send_stopped_with_text("exception", &format!("syscall exit: {}", name));
@@ -2092,7 +2094,7 @@ mod tests {
     #[test]
     fn write_memory_address_offset_calculation() {
         // Positive offset.
-        let addr = parse_address("0x1000");
+        let addr = parse_address("0x1000").unwrap();
         let offset: i64 = 0x10;
         let start = addr + offset as u64;
         assert_eq!(start, 0x1010);
@@ -2144,19 +2146,19 @@ mod tests {
     #[test]
     fn instruction_breakpoint_offset_calculation() {
         // No offset.
-        let addr = parse_address("0x401000");
+        let addr = parse_address("0x401000").unwrap();
         let offset: i64 = 0;
         let start = addr + offset as u64;
         assert_eq!(start, 0x401000);
 
         // Positive offset.
-        let addr = parse_address("0x401000");
+        let addr = parse_address("0x401000").unwrap();
         let offset: i64 = 5;
         let start = addr + offset as u64;
         assert_eq!(start, 0x401005);
 
         // Negative offset.
-        let addr = parse_address("0x401000");
+        let addr = parse_address("0x401000").unwrap();
         let offset: i64 = -16;
         let start = addr.saturating_sub((-offset) as u64);
         assert_eq!(start, 0x400FF0);
