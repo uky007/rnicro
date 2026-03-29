@@ -1658,31 +1658,38 @@ impl<R: Read, W: Write> DapServer<R, W> {
     /// Send new automation events (bypasses, secrets) to the editor's debug console.
     /// Called after each stop event so the editor shows real-time updates.
     fn emit_automation_events(&mut self) {
-        let target = match self.target.as_ref() {
-            Some(t) => t,
-            None => return,
+        // Two-phase borrow: collect messages first (borrows target),
+        // then send them (borrows self mutably).
+        let messages: Vec<String> = if let Some(target) = self.target.as_ref() {
+            let log = target.event_log();
+            let events = log.events();
+            let new_start = self.last_emitted_event;
+            if new_start >= events.len() {
+                return;
+            }
+            self.last_emitted_event = events.len();
+            events[new_start..]
+                .iter()
+                .filter_map(|event| {
+                    let category = event.kind.category();
+                    match category {
+                        crate::event_log::EventCategory::AntiDebug => {
+                            Some(format!("[bypass] {}", event.kind.format_oneline()))
+                        }
+                        crate::event_log::EventCategory::Secret => {
+                            Some(format!("[secret] {}", event.kind.format_oneline()))
+                        }
+                        _ => None,
+                    }
+                })
+                .collect()
+        } else {
+            return;
         };
 
-        let log = target.event_log();
-        let events = log.events();
-        let new_start = self.last_emitted_event;
-        if new_start >= events.len() {
-            return;
+        for msg in &messages {
+            let _ = self.send_output(msg);
         }
-
-        for event in &events[new_start..] {
-            let category = event.kind.category();
-            match category {
-                crate::event_log::EventCategory::AntiDebug => {
-                    let _ = self.send_output(&format!("[bypass] {}", event.kind.format_oneline()));
-                }
-                crate::event_log::EventCategory::Secret => {
-                    let _ = self.send_output(&format!("[secret] {}", event.kind.format_oneline()));
-                }
-                _ => {} // Syscalls/signals are already shown via stopped events
-            }
-        }
-        self.last_emitted_event = events.len();
     }
 
     // ── Response helpers ──────────────────────────────────────────────
