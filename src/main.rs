@@ -19,12 +19,17 @@ fn main() -> anyhow::Result<()> {
 }
 
 mod emulate {
-    use rnicro::emulator::{Emulator, EmulatorStop};
+    use rnicro::emulator::{Emulator, EmulatorConfig, EmulatorStop};
+    use rnicro::event_log::EventCategory;
     use std::path::Path;
 
     pub fn run_emulator(path: &Path) -> anyhow::Result<()> {
         eprintln!("rnicro emulator: loading {}", path.display());
-        let mut emu = Emulator::new()?;
+        let mut emu = Emulator::with_config(EmulatorConfig {
+            trace_syscalls: true,
+            scan_secrets: true,
+            ..Default::default()
+        })?;
         emu.load_elf(path)?;
         let result = emu.run()?;
 
@@ -49,19 +54,52 @@ mod emulate {
             EmulatorStop::Running => {}
         }
 
-        // Print event log
+        // Print event log summary
         let log = emu.event_log();
         if !log.is_empty() {
-            eprintln!("events: {}", log.len());
+            let syscalls = log.events_by_category(EventCategory::Syscall).len();
+            let antidebug = log.events_by_category(EventCategory::AntiDebug).len();
+            let secrets_ev = log.events_by_category(EventCategory::Secret).len();
+            eprintln!(
+                "events: {} total ({} syscalls, {} anti-debug bypasses, {} secrets)",
+                log.len(),
+                syscalls,
+                antidebug,
+                secrets_ev
+            );
+
+            // Show anti-debug bypass details
+            if antidebug > 0 {
+                eprintln!("\nanti-debug bypasses:");
+                for e in log.events_by_category(EventCategory::AntiDebug) {
+                    eprintln!("  {}", e.kind.format_oneline());
+                }
+            }
         }
 
         // Print secrets
         let secrets = emu.secret_scanner().findings();
         if !secrets.is_empty() {
-            eprintln!("secrets found: {}", secrets.len());
+            eprintln!("\nsecrets found: {}", secrets.len());
             for s in &secrets {
-                eprintln!("  [{}] {} at {}", s.category, s.preview, s.addr);
+                eprintln!(
+                    "  [{}] {} bytes at {}{}",
+                    s.category,
+                    s.size,
+                    s.addr,
+                    if let Some(ref pat) = s.pattern_name {
+                        format!(" ({})", pat)
+                    } else {
+                        String::new()
+                    }
+                );
             }
+        }
+
+        // Export full log as JSON to stderr if verbose
+        if std::env::var("RNICRO_JSON").is_ok() {
+            eprintln!("\n--- event log (JSON) ---");
+            eprintln!("{}", log.export_json());
         }
 
         Ok(())
