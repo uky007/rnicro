@@ -967,42 +967,22 @@ impl<R: Read, W: Write> DapServer<R, W> {
                 let engine = target.bypass_engine();
                 let stats = engine.stats();
                 let config = engine.config();
-                let lines = vec![
-                    "Anti-analysis bypass status:".into(),
-                    format!(
-                        "  ptrace: {} ({})",
-                        if config.bypass_ptrace { "ON" } else { "OFF" },
-                        stats.ptrace_bypassed
-                    ),
-                    format!(
-                        "  proc/status: {} ({})",
-                        if config.bypass_proc_status {
-                            "ON"
-                        } else {
-                            "OFF"
-                        },
-                        stats.proc_status_spoofed
-                    ),
-                    format!(
-                        "  timers: {} ({})",
-                        if config.neutralize_watchdog_timers {
-                            "ON"
-                        } else {
-                            "OFF"
-                        },
-                        stats.timers_neutralized
-                    ),
-                    format!(
-                        "  self-signals: {} ({})",
-                        if config.suppress_self_signals {
-                            "ON"
-                        } else {
-                            "OFF"
-                        },
-                        stats.self_signals_suppressed
-                    ),
-                ];
-                Some(lines.join("\n"))
+                let on = |b: bool| if b { "ON" } else { "OFF" };
+                Some(format!(
+                    "Anti-analysis bypass status:\n\
+                     \x20 ptrace: {} ({})\n\
+                     \x20 proc/status: {} ({})\n\
+                     \x20 timers: {} ({})\n\
+                     \x20 self-signals: {} ({})",
+                    on(config.bypass_ptrace),
+                    stats.ptrace_bypassed,
+                    on(config.bypass_proc_status),
+                    stats.proc_status_spoofed,
+                    on(config.neutralize_watchdog_timers),
+                    stats.timers_neutralized,
+                    on(config.suppress_self_signals),
+                    stats.self_signals_suppressed,
+                ))
             }
             "$secrets" => {
                 let findings = target.secret_scanner().findings();
