@@ -647,9 +647,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
         self.send_ok(
             seq,
             ResponseBody::SetExceptionBreakpoints(
-                dap::responses::SetExceptionBreakpointsResponse {
-                    breakpoints: None,
-                },
+                dap::responses::SetExceptionBreakpointsResponse { breakpoints: None },
             ),
         );
         Ok(())
