@@ -119,12 +119,18 @@ pub struct WatchpointManager {
     next_id: u32,
 }
 
-impl WatchpointManager {
-    pub fn new() -> Self {
-        WatchpointManager {
+impl Default for WatchpointManager {
+    fn default() -> Self {
+        Self {
             slots: [None, None, None, None],
             next_id: 1,
         }
+    }
+}
+
+impl WatchpointManager {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Set a hardware watchpoint. Returns the watchpoint ID.

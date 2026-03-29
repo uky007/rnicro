@@ -317,7 +317,7 @@ impl Process {
                 }
                 WaitStatus::PtraceEvent(tid, _, event) => {
                     self.state = ProcessState::Stopped;
-                    if event == libc::PTRACE_EVENT_CLONE as i32 {
+                    if event == libc::PTRACE_EVENT_CLONE {
                         let new_pid_raw = ptrace::getevent(tid)
                             .map_err(|e| Error::Process(format!("getevent: {}", e)))?;
                         let new_tid = Pid::from_raw(new_pid_raw as i32);

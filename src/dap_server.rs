@@ -788,8 +788,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
 
         match self.target.as_ref().unwrap().backtrace() {
             Ok(frames) => {
-                let stack_frames: Vec<StackFrame> =
-                    frames.iter().map(|f| format_stack_frame(f)).collect();
+                let stack_frames: Vec<StackFrame> = frames.iter().map(format_stack_frame).collect();
                 let total = stack_frames.len() as i64;
                 self.send_ok(
                     seq,
@@ -938,7 +937,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
                 return Ok(());
             }
         };
-        let offset = args.instruction_offset.unwrap_or(0) as i64;
+        let offset = args.instruction_offset.unwrap_or(0);
         if args.instruction_count < 0 {
             self.send_error(seq, "instruction_count must be non-negative");
             return Ok(());
@@ -1000,7 +999,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
                 return Ok(());
             }
         };
-        let offset = args.offset.unwrap_or(0) as i64;
+        let offset = args.offset.unwrap_or(0);
         let start = if offset >= 0 {
             addr + offset as u64
         } else {
@@ -1052,7 +1051,7 @@ impl<R: Read, W: Write> DapServer<R, W> {
                 return Ok(());
             }
         };
-        let offset = args.offset.unwrap_or(0) as i64;
+        let offset = args.offset.unwrap_or(0);
         let start = if offset >= 0 {
             addr + offset as u64
         } else {

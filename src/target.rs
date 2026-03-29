@@ -444,7 +444,7 @@ impl Target {
             let _ = self.remove_breakpoint(ret_addr);
         }
 
-        Ok(result?)
+        result
     }
 
     // ── Stack unwinding ────────────────────────────────────────────

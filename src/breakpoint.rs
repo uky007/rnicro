@@ -77,12 +77,18 @@ pub struct BreakpointManager {
     next_id: u32,
 }
 
-impl BreakpointManager {
-    pub fn new() -> Self {
+impl Default for BreakpointManager {
+    fn default() -> Self {
         Self {
             sites: HashMap::new(),
             next_id: 1,
         }
+    }
+}
+
+impl BreakpointManager {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Set a breakpoint at the given address.
