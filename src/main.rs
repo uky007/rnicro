@@ -19,8 +19,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 mod emulate {
-    use std::path::Path;
     use rnicro::emulator::{Emulator, EmulatorStop};
+    use std::path::Path;
 
     pub fn run_emulator(path: &Path) -> anyhow::Result<()> {
         eprintln!("rnicro emulator: loading {}", path.display());
@@ -81,7 +81,10 @@ mod linux {
     use rnicro::types::{ProcessState, StopReason, VirtAddr};
 
     #[derive(Parser)]
-    #[command(name = "rnicro", about = "A Linux x86_64 debugger & exploit development toolkit")]
+    #[command(
+        name = "rnicro",
+        about = "A Linux x86_64 debugger & exploit development toolkit"
+    )]
     struct Cli {
         /// Program to debug
         program: Option<PathBuf>,
@@ -124,11 +127,7 @@ mod linux {
         let mut target = if let Some(pid) = cli.attach_pid {
             let pid = nix::unistd::Pid::from_raw(pid);
             let t = Target::attach(pid)?;
-            println!(
-                "{} attached to process {}",
-                "rnicro".bold().cyan(),
-                pid,
-            );
+            println!("{} attached to process {}", "rnicro".bold().cyan(), pid,);
             t
         } else if let Some(ref program) = cli.program {
             let args_ref: Vec<&str> = cli.args.iter().map(|s| s.as_str()).collect();
@@ -154,8 +153,7 @@ mod linux {
         let mut rl = DefaultEditor::new()?;
 
         loop {
-            if target.state() == ProcessState::Exited
-                || target.state() == ProcessState::Terminated
+            if target.state() == ProcessState::Exited || target.state() == ProcessState::Terminated
             {
                 println!("{}", "Process has ended.".yellow());
                 break;
@@ -232,6 +230,9 @@ mod linux {
             "fmtstr" | "fmt" => cmd_fmtstr(args),
             "shellcode" | "sc" => cmd_shellcode(args),
             "sigrop" | "srop" => cmd_sigrop(args),
+            "events" | "ev" => cmd_events(target, args),
+            "bypass" => cmd_bypass(target, args),
+            "secrets" => cmd_secrets(target, args),
             "list" | "l" => cmd_list(target),
             "help" | "h" => cmd_help(),
             "quit" | "q" => std::process::exit(0),
@@ -311,11 +312,7 @@ mod linux {
                 let mut regs = target.read_registers()?;
                 regs.set(name, value)?;
                 target.write_registers(&regs)?;
-                println!(
-                    "  {} = {}",
-                    name.bold(),
-                    format!("0x{:016x}", value).cyan()
-                );
+                println!("  {} = {}", name.bold(), format!("0x{:016x}", value).cyan());
             }
             Some(sub) => {
                 println!("unknown register subcommand: {}", sub);
@@ -532,62 +529,60 @@ mod linux {
 
     fn cmd_catchpoint(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
         match args.first().copied() {
-            Some("syscall") | Some("sys") => {
-                match args.get(1).copied() {
-                    Some("add") | Some("a") => {
-                        if args.len() < 3 {
-                            println!("usage: catchpoint syscall add <name|number|all>");
-                            return Ok(());
-                        }
-                        if args[2] == "all" {
-                            target.set_catch_all_syscalls(true);
-                            println!("  catching all syscalls");
-                        } else if let Some(num) = rnicro::syscall::number(args[2]) {
-                            target.catch_syscall(num);
-                            println!("  catching syscall {} ({})", args[2], num);
-                        } else if let Ok(num) = args[2].parse::<u64>() {
-                            target.catch_syscall(num);
-                            let name = rnicro::syscall::name(num).unwrap_or("unknown");
-                            println!("  catching syscall {} ({})", name, num);
-                        } else {
-                            println!("unknown syscall: {}", args[2]);
-                        }
+            Some("syscall") | Some("sys") => match args.get(1).copied() {
+                Some("add") | Some("a") => {
+                    if args.len() < 3 {
+                        println!("usage: catchpoint syscall add <name|number|all>");
+                        return Ok(());
                     }
-                    Some("remove") | Some("r") => {
-                        if args.len() < 3 {
-                            println!("usage: catchpoint syscall remove <name|number|all>");
-                            return Ok(());
-                        }
-                        if args[2] == "all" {
-                            target.set_catch_all_syscalls(false);
-                            println!("  stopped catching all syscalls");
-                        } else if let Some(num) = rnicro::syscall::number(args[2]) {
-                            target.uncatch_syscall(num);
-                            println!("  removed catchpoint for syscall {}", args[2]);
-                        } else if let Ok(num) = args[2].parse::<u64>() {
-                            target.uncatch_syscall(num);
-                            println!("  removed catchpoint for syscall {}", num);
-                        }
+                    if args[2] == "all" {
+                        target.set_catch_all_syscalls(true);
+                        println!("  catching all syscalls");
+                    } else if let Some(num) = rnicro::syscall::number(args[2]) {
+                        target.catch_syscall(num);
+                        println!("  catching syscall {} ({})", args[2], num);
+                    } else if let Ok(num) = args[2].parse::<u64>() {
+                        target.catch_syscall(num);
+                        let name = rnicro::syscall::name(num).unwrap_or("unknown");
+                        println!("  catching syscall {} ({})", name, num);
+                    } else {
+                        println!("unknown syscall: {}", args[2]);
                     }
-                    Some("list") | Some("l") | None => {
-                        if target.is_catching_syscalls() {
-                            let caught = target.caught_syscalls();
-                            if caught.is_empty() {
-                                println!("  catching: all syscalls");
-                            } else {
-                                println!("  caught syscalls:");
-                                for &num in caught {
-                                    let name = rnicro::syscall::name(num).unwrap_or("unknown");
-                                    println!("    {} ({})", name, num);
-                                }
-                            }
-                        } else {
-                            println!("  no syscall catchpoints set");
-                        }
-                    }
-                    Some(sub) => println!("unknown catchpoint syscall subcommand: {}", sub),
                 }
-            }
+                Some("remove") | Some("r") => {
+                    if args.len() < 3 {
+                        println!("usage: catchpoint syscall remove <name|number|all>");
+                        return Ok(());
+                    }
+                    if args[2] == "all" {
+                        target.set_catch_all_syscalls(false);
+                        println!("  stopped catching all syscalls");
+                    } else if let Some(num) = rnicro::syscall::number(args[2]) {
+                        target.uncatch_syscall(num);
+                        println!("  removed catchpoint for syscall {}", args[2]);
+                    } else if let Ok(num) = args[2].parse::<u64>() {
+                        target.uncatch_syscall(num);
+                        println!("  removed catchpoint for syscall {}", num);
+                    }
+                }
+                Some("list") | Some("l") | None => {
+                    if target.is_catching_syscalls() {
+                        let caught = target.caught_syscalls();
+                        if caught.is_empty() {
+                            println!("  catching: all syscalls");
+                        } else {
+                            println!("  caught syscalls:");
+                            for &num in caught {
+                                let name = rnicro::syscall::name(num).unwrap_or("unknown");
+                                println!("    {} ({})", name, num);
+                            }
+                        }
+                    } else {
+                        println!("  no syscall catchpoints set");
+                    }
+                }
+                Some(sub) => println!("unknown catchpoint syscall subcommand: {}", sub),
+            },
             None => {
                 println!("usage: catchpoint syscall add|remove|list ...");
             }
@@ -620,21 +615,37 @@ mod linux {
                     }
                 }
                 target.set_signal_policy(sig, policy);
-                println!(
-                    "  {:?}: stop={}, pass={}",
-                    sig, policy.stop, policy.pass
-                );
+                println!("  {:?}: stop={}, pass={}", sig, policy.stop, policy.pass);
             }
             Some("list") | Some("l") | None => {
-                println!("  {:>15}  {}  {}", "signal".bold(), "stop".bold(), "pass".bold());
+                println!(
+                    "  {:>15}  {}  {}",
+                    "signal".bold(),
+                    "stop".bold(),
+                    "pass".bold()
+                );
                 let signals = [
-                    Signal::SIGHUP, Signal::SIGINT, Signal::SIGQUIT,
-                    Signal::SIGILL, Signal::SIGTRAP, Signal::SIGABRT,
-                    Signal::SIGBUS, Signal::SIGFPE, Signal::SIGKILL,
-                    Signal::SIGUSR1, Signal::SIGSEGV, Signal::SIGUSR2,
-                    Signal::SIGPIPE, Signal::SIGALRM, Signal::SIGTERM,
-                    Signal::SIGCHLD, Signal::SIGCONT, Signal::SIGSTOP,
-                    Signal::SIGTSTP, Signal::SIGTTIN, Signal::SIGTTOU,
+                    Signal::SIGHUP,
+                    Signal::SIGINT,
+                    Signal::SIGQUIT,
+                    Signal::SIGILL,
+                    Signal::SIGTRAP,
+                    Signal::SIGABRT,
+                    Signal::SIGBUS,
+                    Signal::SIGFPE,
+                    Signal::SIGKILL,
+                    Signal::SIGUSR1,
+                    Signal::SIGSEGV,
+                    Signal::SIGUSR2,
+                    Signal::SIGPIPE,
+                    Signal::SIGALRM,
+                    Signal::SIGTERM,
+                    Signal::SIGCHLD,
+                    Signal::SIGCONT,
+                    Signal::SIGSTOP,
+                    Signal::SIGTSTP,
+                    Signal::SIGTTIN,
+                    Signal::SIGTTOU,
                 ];
                 for sig in &signals {
                     let policy = target.signal_policy(*sig);
@@ -689,7 +700,11 @@ mod linux {
         match target.backtrace() {
             Ok(frames) => {
                 for frame in &frames {
-                    print!("  #{:<3} {}", frame.index, format!("0x{:016x}", frame.pc.addr()).cyan());
+                    print!(
+                        "  #{:<3} {}",
+                        frame.index,
+                        format!("0x{:016x}", frame.pc.addr()).cyan()
+                    );
                     if let Some(func) = &frame.function {
                         print!(" in {}", func.bold());
                     }
@@ -705,7 +720,11 @@ mod linux {
             Err(e) => {
                 // Fallback: show at least the current PC
                 let regs = target.read_registers()?;
-                println!("  #0   {} (unwind failed: {})", format!("0x{:016x}", regs.pc()).cyan(), e);
+                println!(
+                    "  #0   {} (unwind failed: {})",
+                    format!("0x{:016x}", regs.pc()).cyan(),
+                    e
+                );
             }
         }
         Ok(())
@@ -811,13 +830,13 @@ mod linux {
                     } else {
                         lib.name.clone()
                     };
-                    println!(
-                        "  {:018x}  {}",
-                        lib.base_addr, display_name
-                    );
+                    println!("  {:018x}  {}", lib.base_addr, display_name);
                 }
                 if libs.is_empty() {
-                    println!("  {}", "no shared libraries found (statically linked?)".yellow());
+                    println!(
+                        "  {}",
+                        "no shared libraries found (statically linked?)".yellow()
+                    );
                 }
             }
             Err(e) => {
@@ -849,7 +868,12 @@ mod linux {
                     let marker = if i + 1 == line_idx { ">" } else { " " };
                     let line_num = format!("{:4}", i + 1);
                     if i + 1 == line_idx {
-                        println!("  {} {} {}", marker.green().bold(), line_num.green(), lines[i]);
+                        println!(
+                            "  {} {} {}",
+                            marker.green().bold(),
+                            line_num.green(),
+                            lines[i]
+                        );
                     } else {
                         println!("  {} {} {}", marker, line_num.dimmed(), lines[i]);
                     }
@@ -932,11 +956,15 @@ mod linux {
     }
 
     fn cmd_got(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
-        let show_dyn = args.first().copied() == Some("--all") || args.first().copied() == Some("-a");
+        let show_dyn =
+            args.first().copied() == Some("--all") || args.first().copied() == Some("-a");
 
         let entries = target.got_plt_entries()?;
         if entries.is_empty() {
-            println!("  {}", "no GOT/PLT entries found (statically linked?)".yellow());
+            println!(
+                "  {}",
+                "no GOT/PLT entries found (statically linked?)".yellow()
+            );
         } else {
             println!("  {}", "GOT/PLT entries:".bold());
             println!(
@@ -989,14 +1017,8 @@ mod linux {
     }
 
     fn cmd_strings(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
-        let min_len: usize = args
-            .first()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(4);
-        let max_results: usize = args
-            .get(1)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(200);
+        let min_len: usize = args.first().and_then(|s| s.parse().ok()).unwrap_or(4);
+        let max_results: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(200);
 
         let strings = target.extract_strings(min_len)?;
         let total = strings.len();
@@ -1022,12 +1044,7 @@ mod linux {
             } else {
                 s.content.clone()
             };
-            println!(
-                "  {:016x}{}  {}",
-                s.addr,
-                section,
-                display.cyan()
-            );
+            println!("  {:016x}{}  {}", s.addr, section, display.cyan());
         }
         if total > max_results {
             println!(
@@ -1045,7 +1062,8 @@ mod linux {
             .and_then(|_| args.iter().find_map(|a| a.parse().ok()))
             .unwrap_or(5);
 
-        let filter: Option<&str> = args.iter()
+        let filter: Option<&str> = args
+            .iter()
             .position(|&a| a == "--filter" || a == "-f")
             .and_then(|i| args.get(i + 1).copied());
 
@@ -1077,11 +1095,7 @@ mod linux {
             total, max_depth, max_results
         );
         for g in display_gadgets.iter().take(max_results) {
-            println!(
-                "  {:016x}  {}",
-                g.addr,
-                g.instructions.cyan()
-            );
+            println!("  {:016x}  {}", g.addr, g.instructions.cyan());
         }
         if total > max_results {
             println!(
@@ -1258,27 +1272,42 @@ mod linux {
                     }
                 }
             }
-            Some("bypass") => {
-                match args.get(1).copied() {
-                    Some("enable") | Some("on") => {
-                        let mut cfg = target.bypass_config().clone();
-                        cfg.bypass_ptrace = true;
-                        cfg.skip_int3_traps = true;
-                        target.set_bypass_config(cfg);
-                        println!("  anti-debug bypass: {}", "enabled".green());
-                    }
-                    Some("disable") | Some("off") => {
-                        target.set_bypass_config(rnicro::antidebug::BypassConfig::default());
-                        println!("  anti-debug bypass: {}", "disabled".yellow());
-                    }
-                    Some("status") | None => {
-                        let cfg = target.bypass_config();
-                        println!("  bypass_ptrace:    {}", if cfg.bypass_ptrace { "on".green().to_string() } else { "off".to_string() });
-                        println!("  skip_int3_traps:  {}", if cfg.skip_int3_traps { "on".green().to_string() } else { "off".to_string() });
-                    }
-                    Some(sub) => println!("unknown bypass subcommand: {} (use enable|disable|status)", sub),
+            Some("bypass") => match args.get(1).copied() {
+                Some("enable") | Some("on") => {
+                    let mut cfg = target.bypass_config().clone();
+                    cfg.bypass_ptrace = true;
+                    cfg.skip_int3_traps = true;
+                    target.set_bypass_config(cfg);
+                    println!("  anti-debug bypass: {}", "enabled".green());
                 }
-            }
+                Some("disable") | Some("off") => {
+                    target.set_bypass_config(rnicro::antidebug::BypassConfig::default());
+                    println!("  anti-debug bypass: {}", "disabled".yellow());
+                }
+                Some("status") | None => {
+                    let cfg = target.bypass_config();
+                    println!(
+                        "  bypass_ptrace:    {}",
+                        if cfg.bypass_ptrace {
+                            "on".green().to_string()
+                        } else {
+                            "off".to_string()
+                        }
+                    );
+                    println!(
+                        "  skip_int3_traps:  {}",
+                        if cfg.skip_int3_traps {
+                            "on".green().to_string()
+                        } else {
+                            "off".to_string()
+                        }
+                    );
+                }
+                Some(sub) => println!(
+                    "unknown bypass subcommand: {} (use enable|disable|status)",
+                    sub
+                ),
+            },
             Some(sub) => println!("unknown antidebug subcommand: {} (use scan|bypass)", sub),
         }
         Ok(())
@@ -1307,9 +1336,15 @@ mod linux {
                 );
                 for chunk in &chunks {
                     let mut flags = Vec::new();
-                    if chunk.prev_inuse { flags.push("P"); }
-                    if chunk.is_mmapped { flags.push("M"); }
-                    if chunk.non_main_arena { flags.push("N"); }
+                    if chunk.prev_inuse {
+                        flags.push("P");
+                    }
+                    if chunk.is_mmapped {
+                        flags.push("M");
+                    }
+                    if chunk.non_main_arena {
+                        flags.push("N");
+                    }
                     let flag_str = if flags.is_empty() {
                         "-".to_string()
                     } else {
@@ -1334,8 +1369,7 @@ mod linux {
         let filename = args.first().copied().unwrap_or("core.dump");
         println!("  generating core dump...");
         let data = target.generate_coredump()?;
-        std::fs::write(filename, &data)
-            .map_err(|e| anyhow::anyhow!("write core dump: {}", e))?;
+        std::fs::write(filename, &data).map_err(|e| anyhow::anyhow!("write core dump: {}", e))?;
         println!(
             "  core dump written to {} ({} bytes)",
             filename.bold(),
@@ -1348,8 +1382,13 @@ mod linux {
         match args.first().copied() {
             Some("on") | Some("enable") | None => {
                 target.set_catch_all_syscalls(true);
-                println!("  syscall tracing: {} (use 'continue' to run)", "enabled".green());
-                println!("  tip: use 'strace off' to disable, 'catchpoint syscall list' to see status");
+                println!(
+                    "  syscall tracing: {} (use 'continue' to run)",
+                    "enabled".green()
+                );
+                println!(
+                    "  tip: use 'strace off' to disable, 'catchpoint syscall list' to see status"
+                );
             }
             Some("off") | Some("disable") => {
                 target.set_catch_all_syscalls(false);
@@ -1395,7 +1434,10 @@ mod linux {
                 let matches = target.scan_bytes(text.as_bytes())?;
                 print_scan_results(&matches);
             }
-            sub => println!("unknown scan subcommand: {} (use pattern|bytes|string)", sub),
+            sub => println!(
+                "unknown scan subcommand: {} (use pattern|bytes|string)",
+                sub
+            ),
         }
         Ok(())
     }
@@ -1408,7 +1450,11 @@ mod linux {
         let max_show = 100;
         println!("  {} match(es) found:", matches.len().to_string().bold());
         for m in matches.iter().take(max_show) {
-            let hex: String = m.matched_bytes.iter().map(|b| format!("{:02x}", b)).collect();
+            let hex: String = m
+                .matched_bytes
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect();
             println!("  0x{:016x}  {}", m.address, hex.cyan());
         }
         if matches.len() > max_show {
@@ -1472,11 +1518,16 @@ mod linux {
     fn cmd_fmtstr(args: &[&str]) -> anyhow::Result<()> {
         match args.first().copied() {
             Some("offset") | Some("o") => {
-                let num = args.get(1).and_then(|s| s.parse::<usize>().ok()).unwrap_or(20);
+                let num = args
+                    .get(1)
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(20);
                 let payload = rnicro::fmtstr::generate_offset_finder("AAAAAAAA", num);
                 println!("  {}", "Offset finder payload:".bold());
                 println!("  {}", payload);
-                println!("  tip: send this as input, then use 'fmtstr parse <output>' to find offset");
+                println!(
+                    "  tip: send this as input, then use 'fmtstr parse <output>' to find offset"
+                );
             }
             Some("parse") => {
                 if args.len() < 2 {
@@ -1500,7 +1551,11 @@ mod linux {
                 let num_bytes: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(8);
 
                 let config = rnicro::fmtstr::FmtStrConfig::x86_64(offset);
-                let writes = vec![rnicro::fmtstr::FmtWrite { address, value, num_bytes }];
+                let writes = vec![rnicro::fmtstr::FmtWrite {
+                    address,
+                    value,
+                    num_bytes,
+                }];
                 let payload = rnicro::fmtstr::write_payload(&config, &writes)?;
 
                 println!("  payload ({} bytes):", payload.len());
@@ -1513,17 +1568,21 @@ mod linux {
                     }
                 }
                 println!();
-                println!("  hex: {}", payload.iter().map(|b| format!("{:02x}", b)).collect::<String>().cyan());
+                println!(
+                    "  hex: {}",
+                    payload
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<String>()
+                        .cyan()
+                );
             }
             Some("leak") => {
                 if args.len() < 2 {
                     println!("usage: fmtstr leak <offset1> [offset2] ...");
                     return Ok(());
                 }
-                let offsets: Vec<usize> = args[1..]
-                    .iter()
-                    .filter_map(|s| s.parse().ok())
-                    .collect();
+                let offsets: Vec<usize> = args[1..].iter().filter_map(|s| s.parse().ok()).collect();
                 let payload = rnicro::fmtstr::leak_payload(&offsets);
                 println!("  {}", payload);
             }
@@ -1549,11 +1608,16 @@ mod linux {
                 let result = rnicro::shellcode::analyze(&bytes, rnicro::shellcode::BAD_CHARS_BASIC);
 
                 println!("  size: {} bytes", result.size);
-                println!("  null bytes: {}", if result.has_null_bytes {
-                    format!("yes ({} found)", result.null_positions.len()).red().to_string()
-                } else {
-                    "none".green().to_string()
-                });
+                println!(
+                    "  null bytes: {}",
+                    if result.has_null_bytes {
+                        format!("yes ({} found)", result.null_positions.len())
+                            .red()
+                            .to_string()
+                    } else {
+                        "none".green().to_string()
+                    }
+                );
                 println!("  bad chars (null/CR/LF): {}", result.bad_chars.len());
                 println!("  syscall sites: {}", result.syscall_sites.len());
                 println!("  int 0x80 sites: {}", result.int80_sites.len());
@@ -1570,7 +1634,14 @@ mod linux {
                 let key = u8::from_str_radix(args[2].strip_prefix("0x").unwrap_or(args[2]), 16)
                     .map_err(|_| anyhow::anyhow!("invalid key: {}", args[2]))?;
                 let encoded = rnicro::shellcode::xor_encode(&bytes, key);
-                println!("  encoded: {}", encoded.iter().map(|b| format!("{:02x}", b)).collect::<String>().cyan());
+                println!(
+                    "  encoded: {}",
+                    encoded
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<String>()
+                        .cyan()
+                );
             }
             Some("findkey") | Some("fk") => {
                 if args.len() < 2 {
@@ -1579,7 +1650,10 @@ mod linux {
                 }
                 let bytes = parse_hex_bytes(args[1])?;
                 match rnicro::shellcode::find_xor_key(&bytes, rnicro::shellcode::BAD_CHARS_BASIC) {
-                    Some(key) => println!("  XOR key: {} (avoids null/CR/LF)", format!("0x{:02x}", key).bold()),
+                    Some(key) => println!(
+                        "  XOR key: {} (avoids null/CR/LF)",
+                        format!("0x{:02x}", key).bold()
+                    ),
                     None => println!("  {}", "no suitable key found".yellow()),
                 }
             }
@@ -1605,9 +1679,19 @@ mod linux {
                 let frame = rnicro::sigrop::execve_frame(syscall_addr, binsh_addr);
                 let bytes = frame.to_bytes();
                 println!("  execve(\"/bin/sh\") sigframe ({} bytes):", bytes.len());
-                println!("  rax={} rdi={} rip={}",
-                    "59".bold(), format!("0x{:x}", binsh_addr).cyan(), format!("0x{:x}", syscall_addr).cyan());
-                println!("  hex: {}", bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+                println!(
+                    "  rax={} rdi={} rip={}",
+                    "59".bold(),
+                    format!("0x{:x}", binsh_addr).cyan(),
+                    format!("0x{:x}", syscall_addr).cyan()
+                );
+                println!(
+                    "  hex: {}",
+                    bytes
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<String>()
+                );
             }
             Some("mprotect") => {
                 if args.len() < 5 {
@@ -1621,7 +1705,13 @@ mod linux {
                 let frame = rnicro::sigrop::mprotect_frame(syscall_addr, addr, len, prot);
                 let bytes = frame.to_bytes();
                 println!("  mprotect sigframe ({} bytes):", bytes.len());
-                println!("  hex: {}", bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+                println!(
+                    "  hex: {}",
+                    bytes
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<String>()
+                );
             }
             Some("chain") => {
                 if args.len() < 4 {
@@ -1636,7 +1726,13 @@ mod linux {
                     &[rnicro::sigrop::execve_frame(syscall_addr, binsh_addr)],
                 );
                 println!("  SROP chain ({} bytes):", chain.len());
-                println!("  hex: {}", chain.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+                println!(
+                    "  hex: {}",
+                    chain
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<String>()
+                );
             }
             None => {
                 println!("usage: sigrop execve <sys> <binsh>         execve frame");
@@ -1648,8 +1744,204 @@ mod linux {
         Ok(())
     }
 
+    // ── Automation commands ─────────────────────────────────────────
+
+    fn cmd_events(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        let log = target.event_log();
+        match args.first().copied() {
+            Some("clear") => {
+                target.event_log_mut().clear();
+                println!("  event log cleared");
+            }
+            Some("export") => {
+                let json = log.export_json();
+                println!("{}", json);
+            }
+            Some("syscall") | Some("syscalls") => {
+                let events = log.events_by_category(rnicro::event_log::EventCategory::Syscall);
+                if events.is_empty() {
+                    println!("  no syscall events recorded");
+                } else {
+                    for e in &events {
+                        println!(
+                            "  [{:>6}] {:>10.3}s  {}",
+                            e.seq,
+                            e.elapsed.as_secs_f64(),
+                            e.kind.format_oneline()
+                        );
+                    }
+                    println!("  ({} syscall events)", events.len());
+                }
+            }
+            Some(n) if n.parse::<usize>().is_ok() => {
+                let n: usize = n.parse().unwrap();
+                let recent = log.last_n(n);
+                for e in recent {
+                    println!(
+                        "  [{:>6}] {:>10.3}s  {}",
+                        e.seq,
+                        e.elapsed.as_secs_f64(),
+                        e.kind.format_oneline()
+                    );
+                }
+            }
+            _ => {
+                // Default: show summary + last 10
+                let total = log.len();
+                println!("  {} events recorded", total);
+                if total > 0 {
+                    let recent = log.last_n(10);
+                    if total > 10 {
+                        println!("  (showing last 10)");
+                    }
+                    for e in recent {
+                        println!(
+                            "  [{:>6}] {:>10.3}s  {}",
+                            e.seq,
+                            e.elapsed.as_secs_f64(),
+                            e.kind.format_oneline()
+                        );
+                    }
+                    println!();
+                    println!(
+                        "  use: {} <N> | {} | {} | {}",
+                        "events".bold(),
+                        "syscalls".dimmed(),
+                        "export".dimmed(),
+                        "clear".dimmed()
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn cmd_bypass(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        let engine = target.bypass_engine();
+        match args.first().copied() {
+            Some("on") => {
+                let config = rnicro::antianalysis::BypassEngineConfig::default();
+                *target.bypass_engine_mut().config_mut() = config;
+                println!("  bypass engine: {}", "all enabled".green());
+            }
+            Some("off") => {
+                let config = rnicro::antianalysis::BypassEngineConfig {
+                    bypass_ptrace: false,
+                    bypass_proc_status: false,
+                    bypass_prctl_dumpable: false,
+                    skip_int3_traps: false,
+                    patch_rdtsc: false,
+                    neutralize_watchdog_timers: false,
+                    suppress_self_signals: false,
+                    log_signal_handlers: false,
+                };
+                *target.bypass_engine_mut().config_mut() = config;
+                println!("  bypass engine: {}", "all disabled".red());
+            }
+            _ => {
+                let config = engine.config();
+                let stats = engine.stats();
+                println!("  {}", "Anti-analysis bypass status:".bold());
+                println!(
+                    "    ptrace(TRACEME):     {}  (bypassed: {})",
+                    on_off(config.bypass_ptrace),
+                    stats.ptrace_bypassed
+                );
+                println!(
+                    "    /proc/self/status:   {}  (spoofed: {})",
+                    on_off(config.bypass_proc_status),
+                    stats.proc_status_spoofed
+                );
+                println!(
+                    "    prctl(DUMPABLE):     {}  (rewritten: {})",
+                    on_off(config.bypass_prctl_dumpable),
+                    stats.prctl_rewritten
+                );
+                println!(
+                    "    INT3 auto-skip:      {}  (skipped: {})",
+                    on_off(config.skip_int3_traps),
+                    stats.int3_skipped
+                );
+                println!(
+                    "    alarm/setitimer:     {}  (neutralized: {})",
+                    on_off(config.neutralize_watchdog_timers),
+                    stats.timers_neutralized
+                );
+                println!(
+                    "    self-signals:        {}  (suppressed: {})",
+                    on_off(config.suppress_self_signals),
+                    stats.self_signals_suppressed
+                );
+                println!(
+                    "    sigaction logging:   {}  (logged: {})",
+                    on_off(config.log_signal_handlers),
+                    stats.signal_handlers_logged
+                );
+                println!();
+                println!("  use: {} | {}", "bypass on".bold(), "bypass off".bold());
+            }
+        }
+        Ok(())
+    }
+
+    fn on_off(b: bool) -> colored::ColoredString {
+        if b {
+            "ON".green()
+        } else {
+            "OFF".red()
+        }
+    }
+
+    fn cmd_secrets(target: &mut Target, args: &[&str]) -> anyhow::Result<()> {
+        match args.first().copied() {
+            Some("scan") => {
+                println!("  scanning writable memory...");
+                let findings = target.run_secret_scan();
+                if findings.is_empty() {
+                    println!("  no new secrets found");
+                } else {
+                    println!("  {} new secrets found:", findings.len());
+                    for f in &findings {
+                        println!(
+                            "    [{}] {} bytes at {} — {}",
+                            f.category, f.size, f.addr, f.preview
+                        );
+                    }
+                }
+            }
+            _ => {
+                let findings = target.secret_scanner().findings();
+                if findings.is_empty() {
+                    println!("  no secrets found yet");
+                    println!("  secrets are detected automatically on write/sendto syscalls");
+                    println!("  or run: {} to scan now", "secrets scan".bold());
+                } else {
+                    println!("  {} secrets found:", findings.len());
+                    for f in &findings {
+                        println!(
+                            "    [{}] {} bytes at {} — {}{}",
+                            f.category,
+                            f.size,
+                            f.addr,
+                            f.preview,
+                            if let Some(ref pat) = f.pattern_name {
+                                format!(" ({})", pat)
+                            } else {
+                                String::new()
+                            }
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn cmd_help() -> anyhow::Result<()> {
-        println!("{}", "rnicro - Linux x86_64 debugger & exploit development toolkit".bold());
+        println!(
+            "{}",
+            "rnicro - Linux x86_64 debugger & exploit development toolkit".bold()
+        );
         println!();
         println!("  {} (c)          resume execution", "continue".bold());
         println!(
@@ -1668,16 +1960,10 @@ mod linux {
             "  {} (fin)          step out of current function",
             "finish".bold()
         );
-        println!(
-            "  {} (r)          read/write registers",
-            "register".bold()
-        );
+        println!("  {} (r)          read/write registers", "register".bold());
         println!("    register read          show all registers");
         println!("    register write <n> <v> set register");
-        println!(
-            "  {} (b)       manage breakpoints",
-            "breakpoint".bold()
-        );
+        println!("  {} (b)       manage breakpoints", "breakpoint".bold());
         println!("    breakpoint set <addr>   set a breakpoint");
         println!("    breakpoint set <a> if E conditional breakpoint");
         println!("    breakpoint delete <a>   remove a breakpoint");
@@ -1695,15 +1981,11 @@ mod linux {
         );
         println!("    disassemble [addr] [N] disassemble N instructions");
         println!("    disassemble --att     use AT&T syntax");
+        println!("  {} (bt)         show call stack", "backtrace".bold());
+        println!("  {} (wp)       hardware watchpoints", "watchpoint".bold());
         println!(
-            "  {} (bt)         show call stack",
-            "backtrace".bold()
+            "    watchpoint set <a> <t> <s> set watchpoint (type: write|rw|execute, size: 1|2|4|8)"
         );
-        println!(
-            "  {} (wp)       hardware watchpoints",
-            "watchpoint".bold()
-        );
-        println!("    watchpoint set <a> <t> <s> set watchpoint (type: write|rw|execute, size: 1|2|4|8)");
         println!("    watchpoint delete <id>     remove watchpoint");
         println!("    watchpoint list            list watchpoints");
         println!(
@@ -1724,14 +2006,8 @@ mod linux {
             "  {} (p)             print a variable's value",
             "print".bold()
         );
-        println!(
-            "  {}             list local variables",
-            "locals".bold()
-        );
-        println!(
-            "  {} (thr)          list all threads",
-            "threads".bold()
-        );
+        println!("  {}             list local variables", "locals".bold());
+        println!("  {} (thr)          list all threads", "threads".bold());
         println!(
             "  {} (t)            switch to thread by tid",
             "thread".bold()
@@ -1785,15 +2061,9 @@ mod linux {
             "heap".bold()
         );
         println!("    heap chunks [--max N]       walk malloc_chunk chain");
-        println!(
-            "  {}           generate ELF core dump",
-            "coredump".bold()
-        );
+        println!("  {}           generate ELF core dump", "coredump".bold());
         println!("    coredump [filename]         dump to file (default: core.dump)");
-        println!(
-            "  {}             enhanced syscall tracing",
-            "strace".bold()
-        );
+        println!("  {}             enhanced syscall tracing", "strace".bold());
         println!("    strace on                   enable strace-like output");
         println!("    strace off                  disable tracing");
         println!(
@@ -1803,10 +2073,7 @@ mod linux {
         println!("    scan pattern <hex>          IDA-style hex pattern (e.g. 48 8B ?? 05)");
         println!("    scan bytes <hex>            exact byte search");
         println!("    scan string <text>          string search in memory");
-        println!(
-            "  {}               GOT/PLT function hooking",
-            "hook".bold()
-        );
+        println!("  {}               GOT/PLT function hooking", "hook".bold());
         println!("    hook install <func> <addr>  redirect function via GOT");
         println!("    hook remove <func>          restore original GOT entry");
         println!("    hook list                   show active hooks");
@@ -1824,13 +2091,32 @@ mod linux {
         println!("    shellcode analyze <hex>     detect null/bad/syscall/NOP");
         println!("    shellcode encode <hex> <k>  XOR encode");
         println!("    shellcode findkey <hex>     find null-free XOR key");
-        println!(
-            "  {} (srop)         SROP chain builder",
-            "sigrop".bold()
-        );
+        println!("  {} (srop)         SROP chain builder", "sigrop".bold());
         println!("    sigrop execve <sys> <binsh> execve sigreturn frame");
         println!("    sigrop mprotect <s> <a> ... mprotect sigreturn frame");
         println!("    sigrop chain <sr> <s> <b>   full SROP chain");
+        println!();
+        println!("{}", "Automation:".bold().underline());
+        println!(
+            "  {} (ev)          show/filter/export event log",
+            "events".bold()
+        );
+        println!("    events                      show last 10 events");
+        println!("    events <N>                  show last N events");
+        println!("    events syscalls             show syscall events only");
+        println!("    events export               export as JSON");
+        println!("    events clear                clear event log");
+        println!(
+            "  {}               anti-analysis bypass status/control",
+            "bypass".bold()
+        );
+        println!("    bypass                      show status and stats");
+        println!("    bypass on                   enable all bypasses");
+        println!("    bypass off                  disable all bypasses");
+        println!("  {}              memory secret scanner", "secrets".bold());
+        println!("    secrets                     show discovered secrets");
+        println!("    secrets scan                scan writable memory now");
+        println!();
         println!(
             "  {} (l)              show source at current PC",
             "list".bold()
@@ -1867,18 +2153,12 @@ mod linux {
                 let no_read = |_addr: u64| -> rnicro::error::Result<String> {
                     Err(rnicro::error::Error::Other("no read".into()))
                 };
-                let formatted = rnicro::syscall_trace::format_syscall_entry(
-                    *number, args, &no_read,
-                );
-                println!(
-                    "  {} {}",
-                    "syscall:".yellow(),
-                    formatted,
-                );
+                let formatted =
+                    rnicro::syscall_trace::format_syscall_entry(*number, args, &no_read);
+                println!("  {} {}", "syscall:".yellow(), formatted,);
             }
             StopReason::SyscallExit { number, retval } => {
-                let name = rnicro::syscall::name(*number)
-                    .unwrap_or("unknown");
+                let name = rnicro::syscall::name(*number).unwrap_or("unknown");
                 let ret_str = rnicro::syscall_trace::format_syscall_return(*number, *retval);
                 let colored_ret = if *retval < 0 {
                     ret_str.red().to_string()
@@ -1919,11 +2199,7 @@ mod linux {
     fn print_thread_info(target: &Target) {
         let threads = target.thread_list();
         if threads.len() > 1 {
-            println!(
-                "  [thread {} of {}]",
-                target.current_tid(),
-                threads.len()
-            );
+            println!("  [thread {} of {}]", target.current_tid(), threads.len());
         }
     }
 
@@ -1984,18 +2260,14 @@ mod linux {
 
     fn parse_address(s: &str) -> anyhow::Result<u64> {
         let s = s.strip_prefix("0x").unwrap_or(s);
-        u64::from_str_radix(s, 16)
-            .map_err(|e| anyhow::anyhow!("invalid address '{}': {}", s, e))
+        u64::from_str_radix(s, 16).map_err(|e| anyhow::anyhow!("invalid address '{}': {}", s, e))
     }
 
     /// Parse a hex string like "90909090" or "cc90" into bytes.
     fn parse_hex_bytes(s: &str) -> anyhow::Result<Vec<u8>> {
         let s = s.strip_prefix("0x").unwrap_or(s);
         // Remove any whitespace or \x separators
-        let clean: String = s
-            .replace("\\x", "")
-            .replace(' ', "")
-            .replace(':', "");
+        let clean: String = s.replace("\\x", "").replace(' ', "").replace(':', "");
 
         if clean.len() % 2 != 0 {
             return Err(anyhow::anyhow!(
