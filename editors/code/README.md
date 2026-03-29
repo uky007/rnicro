@@ -1,6 +1,6 @@
 # rnicro Debugger for VS Code
 
-Debug adapter extension for [rnicro](https://github.com/rnicro/rnicro), a Linux x86_64 debugger and exploit development toolkit written in Rust.
+Debug adapter extension for [rnicro](https://github.com/uky007/rnicro), a Linux x86_64 debugger and exploit development toolkit written in Rust.
 
 ## Prerequisites
 
@@ -8,9 +8,7 @@ Debug adapter extension for [rnicro](https://github.com/rnicro/rnicro), a Linux 
 - rnicro binary installed and available in `$PATH` (or configure `rnicro.path`)
 
 ```sh
-# Build from source
-cargo build --release
-# Binary at target/release/rnicro
+cargo install rnicro
 ```
 
 ## Installation
@@ -60,6 +58,18 @@ Create `.vscode/launch.json` in your project:
 |---------------|------------|--------------------------------------|
 | `rnicro.path` | `"rnicro"` | Path to the rnicro binary (or PATH lookup) |
 
+## Debug Console Queries
+
+Type these expressions in the Debug Console while a session is active:
+
+| Expression | Result |
+|------------|--------|
+| `$events` | Last 20 events from the structured event log |
+| `$bypass` | Anti-analysis bypass engine status and counters |
+| `$secrets` | All secrets discovered in memory so far |
+
+Anti-debug bypasses and secret findings are also shown automatically as output events in the Debug Console whenever they occur.
+
 ## Supported Features
 
 | Feature                    | Status |
@@ -74,14 +84,17 @@ Create `.vscode/launch.json` in your project:
 | Step over / into / out     | Yes    |
 | Continue / Pause           | Yes    |
 | Stack traces               | Yes    |
-| Local variables            | Yes    |
+| Local variables            | Yes (Rust type pretty-printing) |
 | Register view              | Yes    |
 | Hover evaluation           | Yes    |
 | Disassembly view           | Yes    |
-| Memory read                | Yes    |
-| Memory write               | Yes    |
+| Memory read / write        | Yes    |
+| Multi-thread support       | Yes    |
+| Security analysis          | Yes (checksec + antidebug on launch) |
+| Anti-analysis bypass       | Yes (automatic, real-time notifications) |
+| Secret extraction          | Yes (automatic, real-time notifications) |
 
 ## Limitations
 
 - Linux x86_64 only (ptrace-based debugger)
-- Single-thread stepping (multi-thread support planned)
+- Dynamic ELF analysis only (static binaries use `--emulate` mode from CLI)
