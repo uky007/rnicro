@@ -80,6 +80,8 @@ use dap::types::{
 use nix::unistd::Pid;
 
 use crate::antidebug;
+#[cfg(test)]
+use crate::checksec::SecurityStatus;
 use crate::checksec::{self, ChecksecResult};
 use crate::disasm::DisasmStyle;
 use crate::dwarf::DwarfInfo;
