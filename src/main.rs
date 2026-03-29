@@ -864,18 +864,13 @@ mod linux {
                 let line_idx = loc.line as usize;
                 let start = line_idx.saturating_sub(4);
                 let end = (line_idx + 3).min(lines.len());
-                for i in start..end {
+                for (i, line) in lines.iter().enumerate().skip(start).take(end - start) {
                     let marker = if i + 1 == line_idx { ">" } else { " " };
                     let line_num = format!("{:4}", i + 1);
                     if i + 1 == line_idx {
-                        println!(
-                            "  {} {} {}",
-                            marker.green().bold(),
-                            line_num.green(),
-                            lines[i]
-                        );
+                        println!("  {} {} {}", marker.green().bold(), line_num.green(), line);
                     } else {
-                        println!("  {} {} {}", marker, line_num.dimmed(), lines[i]);
+                        println!("  {} {} {}", marker, line_num.dimmed(), line);
                     }
                 }
             }
@@ -2267,9 +2262,9 @@ mod linux {
     fn parse_hex_bytes(s: &str) -> anyhow::Result<Vec<u8>> {
         let s = s.strip_prefix("0x").unwrap_or(s);
         // Remove any whitespace or \x separators
-        let clean: String = s.replace("\\x", "").replace(' ', "").replace(':', "");
+        let clean: String = s.replace("\\x", "").replace([' ', ':'], "");
 
-        if clean.len() % 2 != 0 {
+        if !clean.len().is_multiple_of(2) {
             return Err(anyhow::anyhow!(
                 "hex string must have even number of digits, got {}",
                 clean.len()
